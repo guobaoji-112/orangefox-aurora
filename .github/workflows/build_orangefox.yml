@@ -74,6 +74,8 @@ jobs:
 
       - name: 编译 boot image
         run: |
+          # 全步骤输出镜像到文件: 失败时由"收集错误诊断"步骤上传为 Artifact, 便于匿名拉取排查
+          exec > >(tee /tmp/step8.log) 2>&1
           cd ~/fox_14.1
           export ALLOW_MISSING_DEPENDENCIES=true
           export FOX_BUILD_DEVICE=aurora
@@ -98,6 +100,23 @@ jobs:
             tail -n 120 /tmp/fox_build.log
             exit 1
           }
+
+      - name: 收集错误诊断
+        if: failure()
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/diag"
+          [ -f /tmp/step8.log ] && tail -n 400 /tmp/step8.log > "$GITHUB_WORKSPACE/diag/step8_tail400.log"
+          [ -f /tmp/fox_build.log ] && tail -n 400 /tmp/fox_build.log > "$GITHUB_WORKSPACE/diag/mka_tail400.log"
+          { echo "== df =="; df -h; echo "== free =="; free -h; } > "$GITHUB_WORKSPACE/diag/env.txt" 2>&1
+          ls -la "$GITHUB_WORKSPACE/diag"
+
+      - name: 上传错误诊断
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-error-diag
+          path: diag/*
+          if-no-files-found: ignore
 
       - name: 收集产物
         run: |
