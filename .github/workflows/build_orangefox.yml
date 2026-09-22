@@ -4,11 +4,11 @@ name: OrangeFox - 小米14 Ultra (aurora) 云端编译
 # 然后 Actions -> 本工作流 -> Run workflow, 结束后在 Artifacts 下载 boot.img
 
 on:
-  push:   # 推送即自动开始编译(网络受限环境无需手动触发)
+  workflow_dispatch:   # 手动触发
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04   # 固定 22.04: AOSP/橙狐编译的标准环境, 软件包名稳定
     timeout-minutes: 360   # 上限 6 小时
 
     steps:
@@ -34,12 +34,19 @@ jobs:
 
       - name: 安装编译依赖
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git gnupg flex bison build-essential zip curl \
-            zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 libncurses5-dev \
-            lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
-            libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 \
-            python-is-python3 lz4 liblz4-tool zstd openssl repo ccache
+          for i in 1 2 3; do sudo apt-get update && break || (echo "update 重试 $i"; sleep 10); done
+          PKGS="git gnupg flex bison build-essential zip curl zlib1g-dev gcc-multilib \
+            g++-multilib libc6-dev-i386 libncurses-dev lib32ncurses-dev \
+            x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
+            libxml2-utils xsltproc unzip fontconfig python3 python-is-python3 \
+            lz4 liblz4-tool zstd openssl ccache rsync"
+          for i in 1 2 3; do sudo apt-get install -y $PKGS && break || (echo "install 重试 $i"; sleep 10); done
+          # repo 工具: 包源没有就直接装官方单文件版
+          if ! command -v repo >/dev/null; then
+            sudo curl -sSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
+            sudo chmod a+x /usr/local/bin/repo
+          fi
+          command -v repo >/dev/null && repo version || echo "repo 将由 orangefox_sync 脚本处理"
           git config --global user.name "foxbuilder"
           git config --global user.email "foxbuilder@users.noreply.github.com"
 
