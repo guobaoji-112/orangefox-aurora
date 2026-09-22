@@ -11,6 +11,8 @@ jobs:
   build:
     runs-on: ubuntu-22.04   # 固定 22.04: AOSP/橙狐编译的标准环境, 软件包名稳定
     timeout-minutes: 360   # 上限 6 小时
+    permissions:
+      contents: write   # 失败时把诊断日志推送到 ci-logs 分支, 供匿名拉取(artifact 下载 API 需要登录, 分支 raw 文件不需要)
 
     steps:
       - name: 检出仓库 (取 OrangeFoxConfig.mk)
@@ -104,11 +106,32 @@ jobs:
       - name: 收集错误诊断
         if: failure()
         run: |
+          sleep 2   # 等 tee 把尾部刷盘
           mkdir -p "$GITHUB_WORKSPACE/diag"
           [ -f /tmp/step8.log ] && tail -n 400 /tmp/step8.log > "$GITHUB_WORKSPACE/diag/step8_tail400.log"
           [ -f /tmp/fox_build.log ] && tail -n 400 /tmp/fox_build.log > "$GITHUB_WORKSPACE/diag/mka_tail400.log"
           { echo "== df =="; df -h; echo "== free =="; free -h; } > "$GITHUB_WORKSPACE/diag/env.txt" 2>&1
+          # 关键报错行单独摘出
+          grep -inE "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 60 \
+            > "$GITHUB_WORKSPACE/diag/errors.txt" || true
           ls -la "$GITHUB_WORKSPACE/diag"
+          # 同步写入 Step Summary(check-run summary 可匿名经 API 读取)
+          { echo "## step8 尾部 120 行"; echo '```'; tail -n 120 /tmp/step8.log 2>/dev/null; echo '```'; \
+            echo "## error 行"; echo '```'; cat "$GITHUB_WORKSPACE/diag/errors.txt"; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 推送诊断日志到 ci-logs 分支 (匿名可读)
+        if: failure()
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          git config user.name "foxbuilder"
+          git config user.email "foxbuilder@users.noreply.github.com"
+          git checkout -q --orphan ci-logs
+          git rm -rqf . 2>/dev/null || true
+          git add diag
+          git commit -qm "ci: diag logs for run ${GITHUB_RUN_ID} (build ${GITHUB_SHA:0:7})"
+          git push -qf origin ci-logs
+          echo "诊断日志已推送到 ci-logs 分支"
 
       - name: 上传错误诊断
         if: failure()
