@@ -64,15 +64,36 @@ jobs:
       - name: 接入 aurora 设备树并打橙狐补丁
         run: |
           cd ~/fox_14.1
+          # 修复: 树内 mk 硬编码 DEVICE_PATH := device/xiaomi/sm8650, 必须克隆到该路径
+          # (上轮克隆到 device/xiaomi/aurora 导致 "device/xiaomi/sm8650/device.mk does not exist")
           git clone --depth=1 -b main \
             https://github.com/RWA82/android_device_xiaomi_sm8650-twrp.git \
-            device/xiaomi/aurora
-          cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" device/xiaomi/aurora/
-          grep -q OrangeFoxConfig.mk device/xiaomi/aurora/BoardConfig.mk || \
-            echo -e '\n-include $(DEVICE_PATH)/OrangeFoxConfig.mk' >> device/xiaomi/aurora/BoardConfig.mk
-          grep -q OrangeFoxConfig.mk device/xiaomi/aurora/device.mk || \
-            echo -e '\n-include $(DEVICE_PATH)/OrangeFoxConfig.mk' >> device/xiaomi/aurora/device.mk
-          cat device/xiaomi/aurora/AndroidProducts.mk   # 打印 lunch 目标, 便于排查
+            device/xiaomi/sm8650
+          DT=device/xiaomi/sm8650
+          cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" $DT/
+          grep -q OrangeFoxConfig.mk $DT/BoardConfig.mk || \
+            echo -e '\n-include $(DEVICE_PATH)/OrangeFoxConfig.mk' >> $DT/BoardConfig.mk
+          grep -q OrangeFoxConfig.mk $DT/device.mk || \
+            echo -e '\n-include $(DEVICE_PATH)/OrangeFoxConfig.mk' >> $DT/device.mk
+          # 修复: 树内原本只有 twrp_* 产品, 无 fox_aurora。
+          # 在独立目录定义 fox_aurora 产品(继承 twrp_aurora 改名), 避免改动树的 AndroidProducts.mk
+          mkdir -p device/xiaomi/aurorafox
+          cat > device/xiaomi/aurorafox/AndroidProducts.mk <<'EOF'
+          PRODUCT_MAKEFILES := \
+              $(LOCAL_DIR)/fox_aurora.mk
+
+          COMMON_LUNCH_CHOICES := \
+              fox_aurora-eng
+          EOF
+          cat > device/xiaomi/aurorafox/fox_aurora.mk <<'EOF'
+          $(call inherit-product, device/xiaomi/sm8650/twrp_aurora.mk)
+          PRODUCT_NAME := fox_aurora
+          PRODUCT_DEVICE := sm8650
+          EOF
+          echo "=== fox_aurora 产品定义 ==="
+          cat device/xiaomi/aurorafox/fox_aurora.mk
+          echo "=== twrp_aurora 产品定义(核对 DEVICE_PATH) ==="
+          head -25 $DT/twrp_aurora.mk | grep -E "DEVICE_PATH|PRODUCT_NAME"
 
       - name: 编译 boot image
         run: |
@@ -80,7 +101,7 @@ jobs:
           exec > >(tee /tmp/step8.log) 2>&1
           cd ~/fox_14.1
           export ALLOW_MISSING_DEPENDENCIES=true
-          export FOX_BUILD_DEVICE=aurora
+          export FOX_BUILD_DEVICE=sm8650   # 与树内 PRODUCT_DEVICE 一致(out 目录为 out/target/product/sm8650)
           export LC_ALL=C
           source build/envsetup.sh
           echo "=== 树内可用 lunch 目标 ==="
