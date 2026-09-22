@@ -86,7 +86,9 @@ jobs:
           echo "=== 树内可用 lunch 目标 ==="
           grep -rE "COMMON_LUNCH_CHOICES" -A 12 --include=AndroidProducts.mk device/ vendor/ 2>/dev/null || true
           lunch_ok=0
-          for tgt in fox_aurora-ap4a-eng twrp_aurora-eng; do
+          # fox_14.1 树内 release 配置只有 ap2a (上轮诊断: "No release config found for TARGET_RELEASE: ap4a. Available releases are: ap2a")
+          # lunch 三段格式为 <product>-<release>-<variant>
+          for tgt in fox_aurora-ap2a-eng twrp_aurora-ap2a-eng; do
             echo ">>> 尝试 lunch $tgt"
             if lunch "$tgt"; then lunch_ok=1; break; fi
             echo ">>> lunch $tgt 失败, 尝试下一个"
