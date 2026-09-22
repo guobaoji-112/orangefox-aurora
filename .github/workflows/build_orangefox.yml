@@ -70,6 +70,10 @@ jobs:
             https://github.com/RWA82/android_device_xiaomi_sm8650-twrp.git \
             device/xiaomi/sm8650
           DT=device/xiaomi/sm8650
+          # 修复: BoardConfig.mk 里的 BOARD_BUILD_SYSTEM_ROOT_IMAGE 在 fox_14.1(AOSP14) 构建系统已废弃,
+          # 解析直接报错 "BOARD_BUILD_SYSTEM_ROOT_IMAGE is obsolete", lunch 全部失败。删除该行。
+          sed -i '/BOARD_BUILD_SYSTEM_ROOT_IMAGE/d' $DT/BoardConfig.mk
+          ! grep -q BOARD_BUILD_SYSTEM_ROOT_IMAGE $DT/BoardConfig.mk   # fail-fast: 确认已删净
           cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" $DT/
           grep -q OrangeFoxConfig.mk $DT/BoardConfig.mk || \
             echo -e '\n-include $(DEVICE_PATH)/OrangeFoxConfig.mk' >> $DT/BoardConfig.mk
