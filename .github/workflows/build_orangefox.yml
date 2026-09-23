@@ -50,6 +50,11 @@ jobs:
           #   2) Runner.Listener/Worker 设 oom_score_adj=-800: 内核 OOM 永不选 agent, 只杀构建进程
           #      → 步骤干净失败 → trap 取证可见真实报错;
           #   3) swappiness=10 + 提高 min_free_kbytes: 抑制 thrash 僵尸化, 让 OOM 尽快定点爆发。
+          # run#16 定案(2026-09-23, check-run annotations 实锤, 3 路两种死法):
+          #   b/c = agent 自身写日志 "No space left on device" → 磁盘 ENOSPC, 不是内存/编译错误/基础设施;
+          #   a   = "lost communication ... starves it for CPU/Memory" → 内存/IO 饿死。
+          # 磁盘对策: s8 起步清缓存 + 可用空间断言(<25G 主动失败留取证, 不裸奔到 agent 自爆);
+          # 证据对策: s8 内后台看门狗每 3 分钟推 df/free/构建进度到 ci-live 分支, VM 硬死也留最后 3 分钟曲线。
           sudo systemctl stop systemd-oomd.socket systemd-oomd 2>/dev/null || true
           sudo systemctl disable systemd-oomd.socket systemd-oomd 2>/dev/null || true
           sudo sysctl -w vm.swappiness=10 vm.min_free_kbytes=131072
@@ -173,10 +178,41 @@ jobs:
               echo ">>> 推送失败, 重试 $i"; sleep 5
             done
           }
-          trap 'on_fail $?' EXIT
+          trap 'kill $WATCHDOG_PID 2>/dev/null || true; on_fail $?' EXIT
           trap 'on_fail 130' INT
           trap 'on_fail 143' TERM
           trap 'on_fail 129' HUP
+          # === run#16 对策: 起步资源断言 + 后台看门狗 + 削内存碎片 ===
+          sudo apt-get clean || true
+          rm -rf ~/OrangeFox_sync || true
+          echo "=== s8 起步资源快照 ==="; df -h /; free -h
+          du -sh ~/fox_14.1/.repo ~/fox_14.1/out 2>/dev/null || true
+          avail_gb=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -lt 25 ]; then
+            echo "!! 起步可用磁盘仅 ${avail_gb}G(<25G), 必然重蹈 #16 b/c 的 ENOSPC 硬死(agent 自爆连 trap 都不跑); 主动失败, 经 trap 留取证后退出"
+            exit 1
+          fi
+          git worktree add -q --detach /tmp/live-wt 2>/dev/null || true
+          git -C /tmp/live-wt checkout -q -B ci-live 2>/dev/null || true
+          (
+            cd /tmp/live-wt || exit 0
+            git config user.name "foxbuilder"; git config user.email "foxbuilder@users.noreply.github.com"
+            i=0
+            while :; do
+              i=$((i+1))
+              { echo "== t=${i} $(date -u '+%m-%d %H:%M:%S') =="
+                df -h / | tail -1
+                free -m | sed -n '1,3p'
+                tr '\r' '\n' < /tmp/step8.log 2>/dev/null | tail -1
+              } >> live_status.txt
+              git add live_status.txt
+              git commit -qm "live t=${i}" || true
+              git push -qf origin HEAD:refs/heads/ci-live 2>/dev/null || true
+              sleep 180
+            done
+          ) >/dev/null 2>&1 &
+          WATCHDOG_PID=$!
+          export MALLOC_ARENA_MAX=2
           exec > /tmp/step8.log 2>&1
           cd ~/fox_14.1
           export ALLOW_MISSING_DEPENDENCIES=true
