@@ -248,10 +248,24 @@ jobs:
             echo "!! 所有 lunch 目标均失败, 请对照上方可用目标列表"
             exit 1
           fi
-          echo ">>> lunch 成功, 开始 mka adbd bootimage (输出合并进 step8.log)"
-          # -j3(默认 nproc=4): 削 ninja 全量提速段内存峰值(run#15 a/b 死于 s8+52min 波峰)
-          if ! mka -j3 adbd bootimage; then
-            echo "!! mka 失败, 构建日志尾部如下 (真实报错在最后 120 行):"
+          echo ">>> lunch 成功, 开始 mka (run#19 取证: bootimage 目标在本树无产出, ninja 3036 任务全为 adbd 及其依赖, 12:30 '成功' 但无 .img; 改用 TWRP 标准目标 recoveryimage)"
+          built_ok=0
+          for tgt in recoveryimage bootimage; do
+            echo ">>> mka -j3 $tgt"
+            if mka -j3 $tgt; then
+              imgs=$(find "$HOME/fox_14.1/out/target/product" -maxdepth 2 -name '*.img' 2>/dev/null)
+              if [ -n "$imgs" ]; then
+                echo ">>> 目标 $tgt 产出: $imgs"
+                built_ok=1
+                break
+              fi
+              echo ">>> mka $tgt 退出 0 但无 .img, 换下一个目标"
+            else
+              echo ">>> mka $tgt 编译失败, 换下一个目标"
+            fi
+          done
+          if [ "$built_ok" != 1 ]; then
+            echo "!! recoveryimage / bootimage 均未产出 .img, 日志尾部 120 行:"
             tail -n 120 /tmp/step8.log
             exit 1
           fi
