@@ -41,6 +41,22 @@ jobs:
           # run#13 教训: runner 镜像自带约 3G /swapfile 且已激活, 原写法 fallocate/mkswap/swapon 对活跃 swapfile
           # 全部静默失败(|| true 吞错), 实际 swap 仍只有 3G, soong bootstrap(链接 soong_build)在 99% 处
           # 内存耗尽被系统杀死("signal: killed")。改为: 先关掉自带 swap, 重建 32G, 全程 fail-fast, 末尾断言容量。
+          # run#14/#15 新证据(2026-09-23): 换上 32G swap 后 4 路 job 仍全部死于两个固定内存尖峰窗
+          # (soong bootstrap 99% 链接段 ≈ s8+6min; 全树编译提速段 ≈ s8+52min), 且 trap/if:failure 全未触发
+          # → agent/VM 整体死亡, 不是步骤级失败。死亡点与构建阶段强相关(5/5 命中两个尖峰窗)、GitHub
+          # status 全绿 → 推翻"基础设施随机回收"假设, 根因: 内存峰值期的 OOM 牺牲品轮盘(swap thrash
+          # 拖死 agent 心跳 / oomd 整 cgroup 连坐)。处置三件套:
+          #   1) 停 systemd-oomd: 防其按 cgroup 连坐杀掉 runner agent;
+          #   2) Runner.Listener/Worker 设 oom_score_adj=-800: 内核 OOM 永不选 agent, 只杀构建进程
+          #      → 步骤干净失败 → trap 取证可见真实报错;
+          #   3) swappiness=10 + 提高 min_free_kbytes: 抑制 thrash 僵尸化, 让 OOM 尽快定点爆发。
+          sudo systemctl stop systemd-oomd.socket systemd-oomd 2>/dev/null || true
+          sudo systemctl disable systemd-oomd.socket systemd-oomd 2>/dev/null || true
+          sudo sysctl -w vm.swappiness=10 vm.min_free_kbytes=131072
+          pgrep -f 'Runner\.(Listener|Worker)' | while read -r p; do
+            echo -800 | sudo tee /proc/$p/oom_score_adj >/dev/null || true
+          done
+          pgrep -af 'Runner\.(Listener|Worker)' || echo "!! 未找到 runner 进程, OOM 保护未生效"
           sudo swapoff -a || true
           sudo rm -f /swapfile
           sudo fallocate -l 32G /swapfile
@@ -182,7 +198,8 @@ jobs:
             exit 1
           fi
           echo ">>> lunch 成功, 开始 mka adbd bootimage (输出合并进 step8.log)"
-          if ! mka adbd bootimage; then
+          # -j3(默认 nproc=4): 削 ninja 全量提速段内存峰值(run#15 a/b 死于 s8+52min 波峰)
+          if ! mka -j3 adbd bootimage; then
             echo "!! mka 失败, 构建日志尾部如下 (真实报错在最后 120 行):"
             tail -n 120 /tmp/step8.log
             exit 1
