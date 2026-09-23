@@ -150,6 +150,35 @@ jobs:
             grep -q 'inlinecrypt_optimized+wrappedkey_v0' "$F" && { echo ">>> fstab 已修正: $F"; FSTAB_N=$((FSTAB_N+1)); }
           done
           [ "$FSTAB_N" -ge 1 ] || { echo "!! 未找到/未修正含 ICE 加密标志的 fstab"; grep -rl 'fileencryption' $DT | head -5; exit 1; }
+          # run#25 解密引擎移植: RWA82 树不含 prepdecrypt/qseecomd/keymint HAL/keystore2 任何组件
+          # (纸面核实 recovery/root 与 prebuilts/aurora 均无) —— 这是 v1 解密失败的第二根因。
+          # Kyuofox(同机型 TWRP, 实机验证可解密)整套解密组件已收录进本仓库 prebuilts/decrypt/,
+          # 原样进 recovery/root, 不走 PRODUCT_COPY_FILES, 因此不受 check-non-elf ELF 检查限制。
+          # 通用基础库(libc/libc++/libicu 等)用 no-clobber: 橙狐自带版本优先, 保 ABI 一致;
+          # 解密专属库橙狐缺失, 全部落位。init.recovery.qcom.rc 换 Kyuofox 版(含完整解密触发链:
+          # setpatch/install_keyring/start prepdecrypt.vendor/start keystore2/qseecomd)并已回填
+          # early-init insmod 触屏段。
+          DS="$GITHUB_WORKSPACE/prebuilts/decrypt"
+          [ -d "$DS" ] || { echo "!! prebuilts/decrypt 不存在"; exit 1; }
+          cp -f "$DS/init.recovery.qcom.rc" "$DT/recovery/root/init.recovery.qcom.rc"
+          for SUB in vendor system; do
+            (cd "$DS/$SUB" && find . -type d -exec mkdir -p "$DT/recovery/root/$SUB/{}" \;)
+            (cd "$DS/$SUB" && find . -type f | while read -r F; do
+               T="$DT/recovery/root/$SUB/${F#./}"
+               if [ ! -e "$T" ]; then cp -f "$F" "$T"; fi
+             done)
+          done
+          find "$DT/recovery/root/vendor/bin" "$DT/recovery/root/system/bin" -type f -exec chmod 0755 {} \; 2>/dev/null || true
+          # fail-fast: 解密栈关键件必须全部落位
+          for MUST in vendor/bin/prepdecrypt.sh vendor/bin/qseecomd vendor/etc/init/prepdecrypt.rc \
+                      vendor/etc/init/qseecomd.rc vendor/bin/hw/android.hardware.security.keymint-service-qti \
+                      vendor/lib64/libkeymaster_portable.so vendor/lib64/libkeymasterdeviceutils.so \
+                      system/bin/keystore2 system/bin/fscryptpolicyget system/etc/init/keystore2.rc \
+                      system/lib64/libkeymint_support.so system/lib64/android.system.keystore2-V5-ndk.so; do
+            [ -f "$DT/recovery/root/$MUST" ] || { echo "!! 解密栈缺件: $MUST"; exit 1; }
+          done
+          grep -q 'start prepdecrypt.vendor' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! prepdecrypt 触发丢失"; exit 1; }
+          echo ">>> 解密栈落位完成: $(find $DT/recovery/root/vendor/bin $DT/recovery/root/system/bin -type f | wc -l) 个可执行件"
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。

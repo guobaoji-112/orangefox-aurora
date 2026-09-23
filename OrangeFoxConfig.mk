@@ -43,3 +43,13 @@ OF_MAINTAINER := unofficial (ported from RWA82 sm8650 TWRP tree)
 # 但 AOSP14 check-non-elf-file 禁止 PRODUCT_COPY_FILES 带 ELF; 本变量是官方豁免开关,
 # 将硬错降级为警告放行。变量属 product 域, 本文件被 device.mk include, 生效。
 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
+
+# ---- FBE 解密客户端 (#25 定案) ----
+# v1 实机证据: ramdisk 缺整套 system/lib64 keymaster/keystore2 库 → 橙狐 recovery 二进制
+# 编译时未启用解密代码路径, 即使手填 Kyuofox 的库和 keystore2 服务也无法调用。
+# 这两个开关让 recovery 二进制编译进 FBE v2 解密客户端(链接 keymint/keymaster 库,
+# 运行时经 binder 调 keystore2 服务获取 wrappedkey)。keystore2 服务本身由 workflow s7
+# 从 prebuilts/decrypt 原样打入 ramdisk(Kyuofox 实机验证版)。
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_CRYPTO_FBE := true
+
