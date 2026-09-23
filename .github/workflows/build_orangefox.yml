@@ -29,11 +29,22 @@ jobs:
 
       - name: 加 swap (防内存不足)
         run: |
-          sudo fallocate -l 32G /swapfile || true   # 16G 内存 + 32G swap, 降低 soong 分析阶段 OOM 风险
+          # run#13 教训: runner 镜像自带约 3G /swapfile 且已激活, 原写法 fallocate/mkswap/swapon 对活跃 swapfile
+          # 全部静默失败(|| true 吞错), 实际 swap 仍只有 3G, soong bootstrap(链接 soong_build)在 99% 处
+          # 内存耗尽被系统杀死("signal: killed")。改为: 先关掉自带 swap, 重建 32G, 全程 fail-fast, 末尾断言容量。
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 32G /swapfile
           sudo chmod 600 /swapfile
-          sudo mkswap /swapfile || true
-          sudo swapon /swapfile || true
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          swapon --show
           free -h
+          avail=$(free -m | awk '/^Swap:/{print $2}')
+          if [ "${avail:-0}" -lt 30000 ]; then
+            echo "!! swap 未生效(仅 ${avail}Mi >= 30000 才放行), 中止以免重蹈 #13"
+            exit 1
+          fi
 
       - name: 安装编译依赖
         run: |
@@ -113,14 +124,16 @@ jobs:
             exec 1>&3 2>&4
             echo "=== step8 退出码=$rc, 日志尾部 150 行 ==="
             tail -n 150 /tmp/step8.log 2>/dev/null || true
-            echo "=== OOM/被杀进程检查 (dmesg) ==="
-            dmesg -T 2>/dev/null | grep -iE "out of memory|oom|killed process" | tail -n 20 || true
+            echo "=== OOM/被杀进程检查 (dmesg, 需 sudo 否则 dmesg_restrict 下输出为空) ==="
+            sudo dmesg -T 2>/dev/null | grep -iE "out of memory|oom|killed process" | tail -n 20 || true
             [ "$rc" -eq 0 ] && return 0
             cd "$GITHUB_WORKSPACE" || return 0
             mkdir -p diag
             cp /tmp/step8.log diag/step8_full.log 2>/dev/null || true
             tail -n 500 /tmp/step8.log > diag/step8_tail500.log 2>/dev/null || true
-            { df -h; free -h; echo '== dmesg oom/kill =='; dmesg -T 2>/dev/null | grep -iE "out of memory|oom|killed process" | tail -n 30; } > diag/env.txt 2>&1
+            { df -h; free -h; swapon --show; echo '== mem pressure =='; cat /proc/pressure/memory 2>/dev/null || true;
+              echo '== dmesg oom/kill =='; sudo dmesg -T 2>/dev/null | grep -iE "out of memory|oom|killed process" | tail -n 30;
+              echo '== journalctl oom =='; sudo journalctl -k --no-pager 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -n 10; } > diag/env.txt 2>&1
             grep -inE "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 60 > diag/errors.txt || true
             { echo "## step8 exit=$rc 日志尾部 200 行"; echo '```'; tail -n 200 /tmp/step8.log 2>/dev/null; echo '```';
               echo "## error 行"; echo '```'; cat diag/errors.txt; echo '```';
