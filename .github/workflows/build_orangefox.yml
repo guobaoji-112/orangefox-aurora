@@ -130,16 +130,17 @@ jobs:
           # 解析直接报错 "BOARD_BUILD_SYSTEM_ROOT_IMAGE is obsolete", lunch 全部失败。删除该行。
           sed -i '/BOARD_BUILD_SYSTEM_ROOT_IMAGE/d' $DT/BoardConfig.mk
           ! grep -q BOARD_BUILD_SYSTEM_ROOT_IMAGE $DT/BoardConfig.mk   # fail-fast: 确认已删净
-          # run#21 定案(2026-09-23): twrp_aurora.mk 递归复制整个 prebuilts/aurora → recovery/root/vendor,
-          # 把 lib/modules/*.ko(ELF 内核模块 synaptics_tcm2.ko/xiaomi_touch.ko) 一并带入,
-          # 触发 AOSP14 check-non-elf-file-timestamps 硬错(编译 98% 处才炸, ~50 分钟白烧)。
-          # PRODUCT_COPY_FILES 禁 ELF 是设计行为且无豁免变量。对策: 收窄为只复制 firmware 子目录
-          # (触屏配置/模型等非 ELF 固件), .ko 暂不进 recovery ramdisk; 若 recovery 触屏不可用,
-          # 后续再走 BUILD_PREBUILT + LOCAL_MODULE_PATH 机制补挂模块。
-          sed -i 's|find-copy-subdir-files,\*,device/xiaomi/sm8650/prebuilts/aurora,recovery/root/vendor|find-copy-subdir-files,*,device/xiaomi/sm8650/prebuilts/aurora/firmware,recovery/root/vendor/firmware|' $DT/twrp_aurora.mk
-          grep -q 'prebuilts/aurora/firmware,recovery/root/vendor/firmware' $DT/twrp_aurora.mk   # fail-fast: 收窄已生效
-          ! grep -q 'prebuilts/aurora,recovery/root/vendor' $DT/twrp_aurora.mk                   # fail-fast: 整目录递归已消失
+          # run#21 曾把递归拷贝收窄为仅 firmware 子目录以绕过 check-non-elf 硬错 —— 但 run#22 实机定案:
+          # 触屏驱动 synaptics_tcm2/goodix_cap/goodix_core/xiaomi_touch (.ko) 正是靠这条递归拷贝进入
+          # recovery ramdisk, 由 init.recovery.qcom.rc early-init insmod /vendor/lib/modules/*.ko 加载;
+          # 缺了它们触屏彻底无效(实机 21:46 确认)。对策: 恢复整目录递归拷贝, 并在 OrangeFoxConfig.mk
+          # 打开官方豁免变量 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true 放行拷贝中的 ELF 模块。
+          sed -i 's|find-copy-subdir-files,\*,device/xiaomi/sm8650/prebuilts/aurora/firmware,recovery/root/vendor/firmware|find-copy-subdir-files,*,device/xiaomi/sm8650/prebuilts/aurora,recovery/root/vendor|' $DT/twrp_aurora.mk
+          grep -q 'prebuilts/aurora,recovery/root/vendor' $DT/twrp_aurora.mk   # fail-fast: 整目录递归已恢复
+          ! grep -q 'prebuilts/aurora/firmware,recovery/root/vendor/firmware' $DT/twrp_aurora.mk   # fail-fast: 收窄版已消失
           cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" $DT/
+          # fail-fast: 豁免变量必须已在配置中(触屏驱动放行的关键开关)
+          grep -q 'BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true' $DT/OrangeFoxConfig.mk || { echo "!! 缺少 ELF 豁免变量, 触屏驱动将被 check-non-elf 硬错拦截"; exit 1; }
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。

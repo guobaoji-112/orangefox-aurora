@@ -35,3 +35,11 @@ OF_FL_PATH1 := /sys/class/leds/led:flash_0/brightness
 # orscmd.o <command line>:28:25 invalid suffix, 列位 25 与 #define OF_MAINTAINER 精确吻合)
 OF_DEVICE_NAME := Xiaomi 14 Ultra
 OF_MAINTAINER := unofficial (ported from RWA82 sm8650 TWRP tree)
+
+# ---- 触屏驱动豁免 (#22 定案) ----
+# twrp_aurora.mk 递归拷贝 prebuilts/aurora 进 recovery/root/vendor, 其中 lib/modules/*.ko
+# (synaptics_tcm2/goodix_cap/goodix_core/xiaomi_touch) 是 recovery 触屏驱动, 由
+# init.recovery.qcom.rc early-init insmod /vendor/lib/modules/*.ko 加载 —— 缺了触屏即死 (#22 实测)。
+# 但 AOSP14 check-non-elf-file 禁止 PRODUCT_COPY_FILES 带 ELF; 本变量是官方豁免开关,
+# 将硬错降级为警告放行。变量属 product 域, 本文件被 device.mk include, 生效。
+BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
