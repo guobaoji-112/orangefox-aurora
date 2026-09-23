@@ -130,6 +130,15 @@ jobs:
           # 解析直接报错 "BOARD_BUILD_SYSTEM_ROOT_IMAGE is obsolete", lunch 全部失败。删除该行。
           sed -i '/BOARD_BUILD_SYSTEM_ROOT_IMAGE/d' $DT/BoardConfig.mk
           ! grep -q BOARD_BUILD_SYSTEM_ROOT_IMAGE $DT/BoardConfig.mk   # fail-fast: 确认已删净
+          # run#21 定案(2026-09-23): twrp_aurora.mk 递归复制整个 prebuilts/aurora → recovery/root/vendor,
+          # 把 lib/modules/*.ko(ELF 内核模块 synaptics_tcm2.ko/xiaomi_touch.ko) 一并带入,
+          # 触发 AOSP14 check-non-elf-file-timestamps 硬错(编译 98% 处才炸, ~50 分钟白烧)。
+          # PRODUCT_COPY_FILES 禁 ELF 是设计行为且无豁免变量。对策: 收窄为只复制 firmware 子目录
+          # (触屏配置/模型等非 ELF 固件), .ko 暂不进 recovery ramdisk; 若 recovery 触屏不可用,
+          # 后续再走 BUILD_PREBUILT + LOCAL_MODULE_PATH 机制补挂模块。
+          sed -i 's|find-copy-subdir-files,\*,device/xiaomi/sm8650/prebuilts/aurora,recovery/root/vendor|find-copy-subdir-files,*,device/xiaomi/sm8650/prebuilts/aurora/firmware,recovery/root/vendor/firmware|' $DT/twrp_aurora.mk
+          grep -q 'prebuilts/aurora/firmware,recovery/root/vendor/firmware' $DT/twrp_aurora.mk   # fail-fast: 收窄已生效
+          ! grep -q 'prebuilts/aurora,recovery/root/vendor' $DT/twrp_aurora.mk                   # fail-fast: 整目录递归已消失
           cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" $DT/
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
