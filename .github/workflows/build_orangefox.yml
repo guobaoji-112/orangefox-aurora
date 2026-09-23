@@ -119,13 +119,29 @@ jobs:
 
       - name: 接入 aurora 设备树并打橙狐补丁
         run: |
+          # run#25/#26 定案(2026-09-23, 6/6 失败): step7 在线 clone 的 RWA82 树仅 3MB, 却在
+          # Actions 上反复卡 5~20 分钟后死亡(#22~#24 同 clone 仅 1 秒); 本地逐字复现 step7 全部
+          # 命令(bash -e -o pipefail + 真实 RWA82 树 + 真实 prebuilts/decrypt)秒级 EXIT=0
+          # → 脚本无错, 根因是 runner 出口 IP 对 github 匿名 clone 的限速/卡死。
+          # 根治: RWA82 上游自 2025-04-28(c715e9f)起冻结, 整树 vendor 进本仓库
+          # prebuilts/rwa82-tree(git archive 提取), 编译期本地拷贝, step7 不再有任何在线操作。
+          exec > >(tee /tmp/step7.log) 2>&1   # step7 全量留痕: 失败时随 diag 推 ci-logs, 匿名可查
           cd ~/fox_14.1
-          # 修复: 树内 mk 硬编码 DEVICE_PATH := device/xiaomi/sm8650, 必须克隆到该路径
-          # (上轮克隆到 device/xiaomi/aurora 导致 "device/xiaomi/sm8650/device.mk does not exist")
-          git clone --depth=1 -b main \
-            https://github.com/RWA82/android_device_xiaomi_sm8650-twrp.git \
-            device/xiaomi/sm8650
-          DT=device/xiaomi/sm8650
+          # 修复: 树内 mk 硬编码 DEVICE_PATH := device/xiaomi/sm8650, 必须放到该路径
+          # (上轮放到 device/xiaomi/aurora 导致 "device/xiaomi/sm8650/device.mk does not exist")
+          mkdir -p device/xiaomi
+          cp -a "$GITHUB_WORKSPACE/prebuilts/rwa82-tree" device/xiaomi/sm8650
+          # DT 必须绝对路径: 下方解密栈拷贝的子 shell 会 cd 进 $DS/$SUB, 相对 $DT 在错误目录
+          # 解析 → 94 个解密文件全拷进 $DS 垃圾嵌套目录(find/cp 还互相喂文件造成递归爆炸,
+          # 5~20 分钟不等), 真正的 recovery/root 一件没落 → MUST 断言首项即杀 exit 1。
+          # #25/#26 六路失败的确定性根因; 此前本地复现因误用绝对路径侥幸通过, 掩盖了本 bug。
+          DT="$HOME/fox_14.1/device/xiaomi/sm8650"
+          # fail-fast: vendor 树完整性断言(替代在线 clone 后的落位检查)
+          test -f $DT/twrp_aurora.mk || { echo "!! vendor 树缺 twrp_aurora.mk"; exit 1; }
+          test -f $DT/BoardConfig.mk || { echo "!! vendor 树缺 BoardConfig.mk"; exit 1; }
+          test -f $DT/device.mk || { echo "!! vendor 树缺 device.mk"; exit 1; }
+          test -d $DT/prebuilts/aurora || { echo "!! vendor 树缺 prebuilts/aurora(触屏固件+模块)"; exit 1; }
+          test -d $DT/recovery/root || { echo "!! vendor 树缺 recovery/root"; exit 1; }
           # 修复: BoardConfig.mk 里的 BOARD_BUILD_SYSTEM_ROOT_IMAGE 在 fox_14.1(AOSP14) 构建系统已废弃,
           # 解析直接报错 "BOARD_BUILD_SYSTEM_ROOT_IMAGE is obsolete", lunch 全部失败。删除该行。
           sed -i '/BOARD_BUILD_SYSTEM_ROOT_IMAGE/d' $DT/BoardConfig.mk
@@ -355,6 +371,10 @@ jobs:
         run: |
           sleep 2   # 等 tee 把尾部刷盘
           mkdir -p "$GITHUB_WORKSPACE/diag"
+          # run#27 补强: step7 也留痕(/tmp/step7.log), 否则 step7 失败时 diag 只有 env/errors 空壳,
+          # 匿名侧完全无法定位(#25/#26 六路失败只能靠猜的教训)
+          [ -f /tmp/step7.log ] && cp /tmp/step7.log "$GITHUB_WORKSPACE/diag/step7_full.log" || true
+          [ -f /tmp/step7.log ] && tail -n 400 /tmp/step7.log > "$GITHUB_WORKSPACE/diag/step7_tail400.log" || true
           [ -f /tmp/step8.log ] && tail -n 400 /tmp/step8.log > "$GITHUB_WORKSPACE/diag/step8_tail400.log"
           # (#20 教训) step8 内 trap 已把全量日志放进 diag/step8_full.log, 但下方 git rm 会把它清掉 ——
           # 必须显式保留, 否则 FAILED 块的完整 clang 命令行(含出错的 -D)永远丢失
@@ -366,7 +386,8 @@ jobs:
             > "$GITHUB_WORKSPACE/diag/errors.txt" || true
           ls -la "$GITHUB_WORKSPACE/diag"
           # 同步写入 Step Summary(check-run summary 可匿名经 API 读取)
-          { echo "## step8 尾部 120 行"; echo '```'; tail -n 120 /tmp/step8.log 2>/dev/null; echo '```'; \
+          { echo "## step7 尾部 120 行"; echo '```'; tail -n 120 /tmp/step7.log 2>/dev/null; echo '```'; \
+            echo "## step8 尾部 120 行"; echo '```'; tail -n 120 /tmp/step8.log 2>/dev/null; echo '```'; \
             echo "## error 行"; echo '```'; cat "$GITHUB_WORKSPACE/diag/errors.txt"; echo '```'; } \
             >> "$GITHUB_STEP_SUMMARY"
 
