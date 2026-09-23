@@ -25,20 +25,6 @@
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-on early-init
-    insmod /vendor/lib/modules/q6_pdr_dlkm.ko
-    insmod /vendor/lib/modules/q6_notifier_dlkm.ko
-    insmod /vendor/lib/modules/snd_event_dlkm.ko
-    insmod /vendor/lib/modules/gpr_dlkm.ko
-    insmod /vendor/lib/modules/spf_core_dlkm.ko
-    insmod /vendor/lib/modules/adsp_loader_dlkm.ko
-    insmod /vendor/lib/modules/focaltech_touch.ko
-    insmod /vendor/lib/modules/goodix_cap.ko
-    insmod /vendor/lib/modules/goodix_core.ko
-    insmod /vendor/lib/modules/synaptics_tcm2.ko
-    insmod /vendor/lib/modules/speed_touch.ko
-    insmod /vendor/lib/modules/xiaomi_touch.ko
-
 on init
     start vendor.boot-qti
     setprop prepdecrypt.setpatch true
