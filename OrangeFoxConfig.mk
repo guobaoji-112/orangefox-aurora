@@ -30,5 +30,8 @@ OF_CLOCK_WIDGET := 1
 OF_FL_PATH1 := /sys/class/leds/led:flash_0/brightness
 
 # ---- 设备信息 ----
-OF_DEVICE_NAME := "Xiaomi 14 Ultra"
-OF_MAINTAINER := "unofficial (ported from RWA82 sm8650 TWRP tree)"
+# 注意: 值里绝不能再写双引号! orangefox.mk 会用 -DVAR='"$(VAR)"' 再包一层,
+# 内嵌引号会展开成 ""unofficial... → C++11 user-defined-literal 硬错 (#20 实锤:
+# orscmd.o <command line>:28:25 invalid suffix, 列位 25 与 #define OF_MAINTAINER 精确吻合)
+OF_DEVICE_NAME := Xiaomi 14 Ultra
+OF_MAINTAINER := unofficial (ported from RWA82 sm8650 TWRP tree)

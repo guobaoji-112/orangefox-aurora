@@ -131,6 +131,13 @@ jobs:
           sed -i '/BOARD_BUILD_SYSTEM_ROOT_IMAGE/d' $DT/BoardConfig.mk
           ! grep -q BOARD_BUILD_SYSTEM_ROOT_IMAGE $DT/BoardConfig.mk   # fail-fast: 确认已删净
           cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" $DT/
+          # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
+          # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
+          # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。
+          if grep -qE '^[[:space:]]*OF_[A-Z0-9_]+[[:space:]]*[:+?]?=[[:space:]]*"' $DT/OrangeFoxConfig.mk; then
+            echo "!! OrangeFoxConfig.mk 存在内嵌双引号的值(orangefox.mk 会再包一层引号 → orscmd 等模块编译硬错), 请去掉引号后重跑"
+            exit 1
+          fi
           grep -q OrangeFoxConfig.mk $DT/BoardConfig.mk || \
             echo -e '\n-include $(DEVICE_PATH)/OrangeFoxConfig.mk' >> $DT/BoardConfig.mk
           grep -q OrangeFoxConfig.mk $DT/device.mk || \
@@ -179,7 +186,7 @@ jobs:
             { df -h; free -h; swapon --show; echo '== mem pressure =='; cat /proc/pressure/memory 2>/dev/null || true;
               echo '== dmesg oom/kill =='; sudo dmesg -T 2>/dev/null | grep -iE "out of memory|oom|killed process" | tail -n 30;
               echo '== journalctl oom =='; sudo journalctl -k --no-pager 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -n 10; } > diag/env.txt 2>&1
-            grep -inE "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 60 > diag/errors.txt || true
+            grep -inE -A 4 "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 120 > diag/errors.txt || true
             { echo "## step8 exit=$rc 日志尾部 200 行"; echo '```'; tail -n 200 /tmp/step8.log 2>/dev/null; echo '```';
               echo "## error 行"; echo '```'; cat diag/errors.txt; echo '```';
               echo "## OOM/kill 记录"; echo '```'; grep -iE "out of memory|oom|killed process" diag/env.txt || echo "(无)"; echo '```'; } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -290,10 +297,13 @@ jobs:
           sleep 2   # 等 tee 把尾部刷盘
           mkdir -p "$GITHUB_WORKSPACE/diag"
           [ -f /tmp/step8.log ] && tail -n 400 /tmp/step8.log > "$GITHUB_WORKSPACE/diag/step8_tail400.log"
+          # (#20 教训) step8 内 trap 已把全量日志放进 diag/step8_full.log, 但下方 git rm 会把它清掉 ——
+          # 必须显式保留, 否则 FAILED 块的完整 clang 命令行(含出错的 -D)永远丢失
+          [ -f /tmp/step8.log ] && cp /tmp/step8.log "$GITHUB_WORKSPACE/diag/step8_full.log" || true
           [ -f /tmp/fox_build.log ] && tail -n 400 /tmp/fox_build.log > "$GITHUB_WORKSPACE/diag/mka_tail400.log"
           { echo "== df =="; df -h; echo "== free =="; free -h; } > "$GITHUB_WORKSPACE/diag/env.txt" 2>&1
-          # 关键报错行单独摘出
-          grep -inE "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 60 \
+          # 关键报错行单独摘出 (-A 4: 连带 FAILED 下面的完整编译命令行, #20 靠它才能定位 -D 宏)
+          grep -inE -A 4 "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 120 \
             > "$GITHUB_WORKSPACE/diag/errors.txt" || true
           ls -la "$GITHUB_WORKSPACE/diag"
           # 同步写入 Step Summary(check-run summary 可匿名经 API 读取)
