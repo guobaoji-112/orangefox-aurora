@@ -172,11 +172,16 @@ jobs:
           # 原样进 recovery/root, 不走 PRODUCT_COPY_FILES, 因此不受 check-non-elf ELF 检查限制。
           # 通用基础库(libc/libc++/libicu 等)用 no-clobber: 橙狐自带版本优先, 保 ABI 一致;
           # 解密专属库橙狐缺失, 全部落位。init.recovery.qcom.rc 换 Kyuofox 版(含完整解密触发链:
-          # setpatch/install_keyring/start prepdecrypt.vendor/start keystore2/qseecomd)并已回填
-          # early-init insmod 触屏段。
+          # setpatch/install_keyring/start prepdecrypt.vendor/start keystore2/qseecomd)。
+          # insmod 触屏段不再回填: RWA82 预编译 .ko 与手机内核 6.1.138 符号 CRC 不一致,
+          # insmod 必然失败(#26 dmesg 实锤), 触屏改走 fstab vendor_dlkm 正规加载链;
+          # 但 #26 重构把 MIUI rc 的 backlight/USB gadget 行一并删掉 → #27 实机黑屏。
+          # #28 已把 backlight=200 + configfs/UDC 三段回填进 prebuilts/decrypt 版 rc。
           DS="$GITHUB_WORKSPACE/prebuilts/decrypt"
           [ -d "$DS" ] || { echo "!! prebuilts/decrypt 不存在"; exit 1; }
           cp -f "$DS/init.recovery.qcom.rc" "$DT/recovery/root/init.recovery.qcom.rc"
+          # fail-fast: 背光行必须在(#27 实机黑屏根因, 缺它屏幕必黑)
+          grep -q 'panel0-backlight/brightness' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺背光行, 黑屏回归"; exit 1; }
           # run#26 触屏真根因(2026-09-23 实机 dmesg 定案): RWA82 recovery.fstab 缺 vendor_dlkm/
           # system_dlkm first_stage_mount 条目 → 与手机内核匹配的触屏模块(在 super 的 vendor_dlkm
           # 动态分区里)永不挂载; RWA82 自带的 prebuilts/aurora/lib/modules/*.ko 是另一内核变体

@@ -28,6 +28,17 @@
 on init
     start vendor.boot-qti
     setprop prepdecrypt.setpatch true
+    # run#27 黑屏根因修复(2026-09-24 实机): Kyuofox 原版 rc 无背光初始化,
+    # 本机屏幕点亮依赖 MIUI stock rc 的 backlight 写入(#24 版有, #26 重构时被连带删除)
+    write /sys/class/backlight/panel0-backlight/brightness 200
+    # USB gadget 基础(源自 MIUI stock rc, #24 实机可用): configfs 使能 + UDC 控制器
+    setprop sys.usb.configfs 1
+
+on property:ro.boot.usbcontroller=*
+    setprop sys.usb.controller ${ro.boot.usbcontroller}
+    wait /sys/bus/platform/devices/${ro.boot.usb.dwc3_msm:-a600000.ssusb}/mode
+    write /sys/bus/platform/devices/${ro.boot.usb.dwc3_msm:-a600000.ssusb}/mode peripheral
+    wait /sys/class/udc/${ro.boot.usbcontroller} 1
 
 on early-fs
     write /proc/sys/walt/sched_lib_name "recovery,magiskboot,Updater,updater,update_engine_sideload"
