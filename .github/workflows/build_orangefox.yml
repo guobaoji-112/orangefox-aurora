@@ -141,6 +141,15 @@ jobs:
           cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" $DT/
           # fail-fast: 豁免变量必须已在配置中(触屏驱动放行的关键开关)
           grep -q 'BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true' $DT/OrangeFoxConfig.mk || { echo "!! 缺少 ELF 豁免变量, 触屏驱动将被 check-non-elf 硬错拦截"; exit 1; }
+          # run#22 解密定案(2026-09-23 实机): RWA82 树 fstab 的 userdata 行用了旧式高通 ICE 加密标志
+          # (fileencryption=ice,wrappedkey), 而手机实际是 FBE v2 + wrappedkey(Kyuofox 可用版 fstab 对比实锤)。
+          # 解密库按错误标志选错路径 → /data 挂载 "No such device"。替换为与手机真实加密一致的标志:
+          FSTAB_N=0
+          for F in $(grep -rl 'fileencryption=ice,wrappedkey' $DT 2>/dev/null); do
+            sed -i 's|fileencryption=ice,wrappedkey,keydirectory=/metadata/vold/metadata_encryption|fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0,keydirectory=/metadata/vold/metadata_encryption,metadata_encryption=aes-256-xts:wrappedkey_v0|' "$F"
+            grep -q 'inlinecrypt_optimized+wrappedkey_v0' "$F" && { echo ">>> fstab 已修正: $F"; FSTAB_N=$((FSTAB_N+1)); }
+          done
+          [ "$FSTAB_N" -ge 1 ] || { echo "!! 未找到/未修正含 ICE 加密标志的 fstab"; grep -rl 'fileencryption' $DT | head -5; exit 1; }
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。
