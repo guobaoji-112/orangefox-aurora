@@ -29,9 +29,14 @@ jobs:
 
       - name: 最大化磁盘空间
         run: |
+          # run#17 定案(2026-09-23): s3 旧清单清完后仍不够——146G 盘被完整 14.1 树+32G swapfile
+          # 吃满, s8 起步仅 2.6G。扩大清理: hostedtoolcache 整目录(Python/PyPy/Node 工具链, 不含
+          # runner 自带 node, 不影响 actions)、miniconda、rust。JDK(/usr/lib/jvm)编译必需, 保留。
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
-                      /usr/share/swift /opt/az /opt/pipx
+                      /opt/hostedtoolcache /usr/local/.ghcup \
+                      /usr/share/swift /opt/az /opt/pipx \
+                      /usr/share/miniconda /usr/share/rust* \
+                      /var/lib/apt/lists/*
           sudo docker image prune -af || true
           sudo apt-get clean
           df -h /
@@ -101,6 +106,16 @@ jobs:
           cd ~/OrangeFox_sync/sync
           ./orangefox_sync.sh --branch 14.1 --path ~/fox_14.1
           test -f ~/fox_14.1/build/envsetup.sh   # fail-fast
+          # run#17 定案(2026-09-23): 146G 盘装不下完整 14.1 树(.repo+工作区)+32G swapfile,
+          # s8 起步仅剩 2.6G, 被 <25G 断言按设计拦下(trap 取证: df 99% used, 内存侧健康)。
+          # 对策: 同步完成后立即裁掉 .repo 的 git 对象库(工作区文件原样保留), mka bootimage
+          # 只读工作区, 这是 AOSP CI 的标准回收手段, 预期回收 40~70G。代价: repo 命令与
+          # 各项目 git 历史查询失效; 内核 setlocalversion 在 git 不可用时优雅回退, 仅影响
+          # 本地版本后缀, 不影响 boot.img 产物本身。若构建因缺 git 元数据失败, trap 日志可见。
+          du -sh ~/fox_14.1/.repo/projects ~/fox_14.1/.repo/project-objects 2>/dev/null || true
+          rm -rf ~/fox_14.1/.repo/projects ~/fox_14.1/.repo/project-objects
+          df -h /
+          test -f ~/fox_14.1/build/envsetup.sh   # 裁剪后复验 fail-fast
 
       - name: 接入 aurora 设备树并打橙狐补丁
         run: |
