@@ -14,6 +14,15 @@ jobs:
     permissions:
       contents: write   # 失败时把诊断日志推送到 ci-logs 分支, 供匿名拉取(artifact 下载 API 需要登录, 分支 raw 文件不需要)
 
+    # run#10~#13 教训: step8 总在开始后 3~10 分钟内被外部 SIGTERM 终止(日志实锤: soong bootstrap 99% 处
+    # "Got signal: terminated", trap 正常执行、日志成功推送 → 是 runner 被基础设施回收, 不是编译错误、
+    # 不是 OOM(OOM 是 SIGKILL)、不是页面取消(那会标记 cancelled)。无法预防, 只能用独立随机事件对冲:
+    # 3 路独立 VM 并行跑同一构建, 随机回收不可能 3 路全中; public 仓库 Actions 免费无时长限制。
+    strategy:
+      fail-fast: false   # 关键: 任何一路失败/被杀绝不牵连其余两路
+      matrix:
+        shard: [a, b, c]
+
     steps:
       - name: 检出仓库 (取 OrangeFoxConfig.mk)
         uses: actions/checkout@v4
@@ -142,7 +151,7 @@ jobs:
             git checkout -q --orphan ci-logs 2>/dev/null || git checkout -q ci-logs
             git rm -rqf . 2>/dev/null || true
             git add diag
-            git commit -qm "step8 log (run ${GITHUB_RUN_ID})"
+            git commit -qm "step8 log (run ${GITHUB_RUN_ID} shard ${{ matrix.shard }})"
             for i in 1 2 3; do
               if git push -qf origin ci-logs; then echo ">>> 诊断日志已推送 ci-logs 分支"; break; fi
               echo ">>> 推送失败, 重试 $i"; sleep 5
@@ -205,7 +214,7 @@ jobs:
           git checkout -q --orphan ci-logs
           git rm -rqf . 2>/dev/null || true
           git add diag
-          git commit -qm "ci: diag logs for run ${GITHUB_RUN_ID} (build ${GITHUB_SHA:0:7})"
+          git commit -qm "ci: diag logs for run ${GITHUB_RUN_ID} shard ${{ matrix.shard }} (build ${GITHUB_SHA:0:7})"
           git push -qf origin ci-logs
           echo "诊断日志已推送到 ci-logs 分支"
 
@@ -213,7 +222,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-error-diag
+          name: build-error-diag-${{ matrix.shard }}
           path: diag/*
           if-no-files-found: ignore
 
@@ -227,6 +236,6 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: OrangeFox-aurora
+          name: OrangeFox-aurora-${{ matrix.shard }}
           path: output/*.img
           if-no-files-found: error
