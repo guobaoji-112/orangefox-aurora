@@ -177,6 +177,13 @@ jobs:
           # insmod 必然失败(#26 dmesg 实锤), 触屏改走 fstab vendor_dlkm 正规加载链;
           # 但 #26 重构把 MIUI rc 的 backlight/USB gadget 行一并删掉 → #27 实机黑屏。
           # #28 已把 backlight=200 + configfs/UDC 三段回填进 prebuilts/decrypt 版 rc。
+          # run#30 对分构建: FOX_DECRYPT=0 时整体跳过解密段, ramdisk 回到 #24 等价状态。
+          # 目的: 切分「橙狐上游漂移」vs「解密栈/rc/fstab 替换」两大嫌疑 ——
+          #   #30 能进 UI → 嫌疑在解密段, 逐件加回定位;
+          #   #30 仍黑屏 → 嫌疑在上游漂移(#24 与 #27 两次 sync 间隔上游动过), 需钉住 manifest。
+          # 恢复解密: 去掉 FOX_DECRYPT=0 即可。
+          export FOX_DECRYPT=0
+          if [ "${FOX_DECRYPT:-1}" = "1" ]; then
           DS="$GITHUB_WORKSPACE/prebuilts/decrypt"
           [ -d "$DS" ] || { echo "!! prebuilts/decrypt 不存在"; exit 1; }
           cp -f "$DS/init.recovery.qcom.rc" "$DT/recovery/root/init.recovery.qcom.rc"
@@ -217,6 +224,7 @@ jobs:
           done
           grep -q 'start prepdecrypt.vendor' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! prepdecrypt 触发丢失"; exit 1; }
           echo ">>> 解密栈落位完成: $(find $DT/recovery/root/vendor/bin $DT/recovery/root/system/bin -type f | wc -l) 个可执行件"
+          fi   # FOX_DECRYPT 门结束(run#30 对分)
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。
