@@ -193,6 +193,12 @@ jobs:
           cp -f "$DS/recovery.fstab" "$DT/recovery/root/system/etc/recovery.fstab"
           grep -q 'vendor_dlkm' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 vendor_dlkm 挂载条目"; exit 1; }
           grep -q 'wrappedkey_v0' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 FBE v2 wrappedkey 标志"; exit 1; }
+          # run#29 定案(2026-09-24, 三方 ramdisk 静态分析): Kyuofox fstab 的 system 行带
+          # avb_keys=/avb/q-gsi.avbpubkey:... 而 GSI AVB 公钥只在 Kyuofox 自己的 ramdisk 里,
+          # 其包里只有 fstab 没带密钥 → 本构建 ramdisk 无 /avb/ 目录 → first-stage init 挂 /system
+          # 验签失败 → panic → 无限重启(logo→黑→循环), 任何 rc 均无机会执行(#28 背光/USB 修复
+          # 因此全部无效)。剥掉 avb_keys 走设备自带 vbmeta_system 验签链(#24 同路径, 已验证可开机)。
+          ! grep -q 'avb_keys=' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 残留 avb_keys 而 ramdisk 无 /avb 密钥, first-stage 验签必炸"; exit 1; }
           for SUB in vendor system; do
             (cd "$DS/$SUB" && find . -type d -exec mkdir -p "$DT/recovery/root/$SUB/{}" \;)
             (cd "$DS/$SUB" && find . -type f | while read -r F; do
