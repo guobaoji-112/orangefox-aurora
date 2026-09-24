@@ -189,23 +189,6 @@ jobs:
           cp -f "$DS/init.recovery.qcom.rc" "$DT/recovery/root/init.recovery.qcom.rc"
           # fail-fast: 背光行必须在(#27 实机黑屏根因, 缺它屏幕必黑)
           grep -q 'panel0-backlight/brightness' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺背光行, 黑屏回归"; exit 1; }
-          # run#26 触屏真根因(2026-09-23 实机 dmesg 定案): RWA82 recovery.fstab 缺 vendor_dlkm/
-          # system_dlkm first_stage_mount 条目 → 与手机内核匹配的触屏模块(在 super 的 vendor_dlkm
-          # 动态分区里)永不挂载; RWA82 自带的 prebuilts/aurora/lib/modules/*.ko 是另一内核变体
-          # (6.1.68-gde4a545443e1-dirty)编译, 符号 CRC 与手机内核 6.1.138-g965475777129 不一致
-          # (xiaomi_touch.ko: "disagrees about version of symbol panel_event_notifier_register")
-          # → insmod 全灭, 触屏死。Kyuofox 不带任何 .ko 却触屏正常 = 靠 fstab 挂载 vendor_dlkm 走
-          # 正规模块加载链。对策: 整文件换用 Kyuofox 实机验证的 recovery.fstab(自带 vendor_dlkm/
-          # system_dlkm 挂载 + 正确 FBE v2 wrappedkey_v0 userdata 行, 触屏+解密双修复)。
-          cp -f "$DS/recovery.fstab" "$DT/recovery/root/system/etc/recovery.fstab"
-          grep -q 'vendor_dlkm' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 vendor_dlkm 挂载条目"; exit 1; }
-          grep -q 'wrappedkey_v0' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 FBE v2 wrappedkey 标志"; exit 1; }
-          # run#29 定案(2026-09-24, 三方 ramdisk 静态分析): Kyuofox fstab 的 system 行带
-          # avb_keys=/avb/q-gsi.avbpubkey:... 而 GSI AVB 公钥只在 Kyuofox 自己的 ramdisk 里,
-          # 其包里只有 fstab 没带密钥 → 本构建 ramdisk 无 /avb/ 目录 → first-stage init 挂 /system
-          # 验签失败 → panic → 无限重启(logo→黑→循环), 任何 rc 均无机会执行(#28 背光/USB 修复
-          # 因此全部无效)。剥掉 avb_keys 走设备自带 vbmeta_system 验签链(#24 同路径, 已验证可开机)。
-          ! grep -q 'avb_keys=' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 残留 avb_keys 而 ramdisk 无 /avb 密钥, first-stage 验签必炸"; exit 1; }
           for SUB in vendor system; do
             (cd "$DS/$SUB" && find . -type d -exec mkdir -p "$DT/recovery/root/$SUB/{}" \;)
             (cd "$DS/$SUB" && find . -type f | while read -r F; do
@@ -225,6 +208,17 @@ jobs:
           grep -q 'start prepdecrypt.vendor' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! prepdecrypt 触发丢失"; exit 1; }
           echo ">>> 解密栈落位完成: $(find $DT/recovery/root/vendor/bin $DT/recovery/root/system/bin -type f | wc -l) 个可执行件"
           fi   # FOX_DECRYPT 门结束(run#30 对分)
+          # run#31 对分第二步: 仅单独加回 Kyuofox fstab(avb_keys 已剥版, 触屏修复核心件),
+          # rc 与解密文件仍在门外 —— 若 #31 仍能进 UI 且触屏复活, 则 fstab 无罪, 继续测 rc/文件;
+          # 若 #31 黑屏, 则 fstab 是凶手(剩余嫌疑只剩 rc 与解密文件二选一)。
+          # 触屏机理(run#26 dmesg 定案): 树原版 fstab 缺 vendor_dlkm/system_dlkm first_stage_mount
+          # 条目, 与手机内核匹配的触屏模块在 super 的 vendor_dlkm 动态分区里永不挂载 → 触屏死;
+          # RWA82 自带 .ko 是另一内核变体编译(CRC 不符)不可用; Kyuofox fstab 自带正确挂载条目。
+          DSF="$GITHUB_WORKSPACE/prebuilts/decrypt"
+          cp -f "$DSF/recovery.fstab" "$DT/recovery/root/system/etc/recovery.fstab"
+          grep -q 'vendor_dlkm' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 vendor_dlkm 挂载条目"; exit 1; }
+          grep -q 'wrappedkey_v0' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 FBE v2 wrappedkey 标志"; exit 1; }
+          ! grep -q 'avb_keys=' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 残留 avb_keys 而 ramdisk 无 /avb 密钥"; exit 1; }
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。
