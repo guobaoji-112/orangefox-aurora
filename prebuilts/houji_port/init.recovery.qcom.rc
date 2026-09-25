@@ -32,6 +32,8 @@ on early-init
 on init
     start vendor.boot-qti
     setprop prepdecrypt.setpatch true
+    # fix: keymint 的 WaitForPropertyCreation 需要此属性存在, 缺失则 TA 加载永久卡死
+    setprop vendor.gatekeeper.is_security_level_spu false
     # aurora: 背光点亮(#30/#31 实证必需, houji 面板不需要但 aurora 需要)
     write /sys/class/backlight/panel0-backlight/brightness 200
 

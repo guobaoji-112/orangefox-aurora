@@ -277,7 +277,9 @@ jobs:
           for MUSTA in system/etc/task_profiles.json system/lib64/libc++.so system/bin/keystore2 system/lib64/libkeystore2_crypto.so system/lib64/libkm_compat.so system/lib64/libkm_compat_service.so vendor/bin/hw/android.hardware.security.keymint-service-qti vendor/lib64/libqtikeymint.so; do
             [ -f "$DT/recovery/root/$MUSTA" ] || { echo "!! aurora_fix 缺件: $MUSTA"; exit 1; }
           done
-          [ "$(stat -c%s "$DT/recovery/root/system/bin/keystore2")" = "2377240" ] || { echo "!! keystore2 须 Lu A16 版(2377240B)"; exit 1; }
+          grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.gatekeeper-service-qti.rc" || { echo "!! gatekeeper rc 缺 on-init 启动"; exit 1; }
+          grep -q 'is_security_level_spu' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 is_security_level_spu 属性"; exit 1; }
+          [ -f "$DT/recovery/root/system/bin/se_omapi" ] || { echo "!! 缺 se_omapi (weaver 取密钥链)"; exit 1; }
           [ "$(stat -c%s "$DT/recovery/root/vendor/bin/hw/android.hardware.security.keymint-service-qti")" = "45312" ] || { echo "!! keymint 须 Lu A16 版(45312B)"; exit 1; }
           grep -q '/dev/smcinvoke' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 smcinvoke 规则"; exit 1; }
           grep -q '/dev/dma_heap/qcom' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 dma_heap 规则"; exit 1; }
