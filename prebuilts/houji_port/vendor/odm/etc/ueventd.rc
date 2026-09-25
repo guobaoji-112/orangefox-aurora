@@ -76,3 +76,8 @@ subsystem mi_display
 /dev/fm-ntag              0660   nfc        nfc
 /dev/nxp-ntag             0660   nfc        nfc
 
+
+# fix1(2026-09-25 活体验证): TEE 链路节点权限 —— 缺失时 qseecomd 255 / keymint 不注册
+/dev/smcinvoke              0666  root   root
+/dev/dma_heap/qcom,*        0666  root   root
+/dev/0:0:0:*                0666  root   root

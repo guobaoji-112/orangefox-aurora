@@ -256,6 +256,33 @@ jobs:
                        vendor/etc/ssg/ta_config.json vendor/etc/vintf/manifest.xml; do
             [ -f "$DT/recovery/root/$MUSTF" ] || { echo "!! tw_fill 缺件: $MUSTF"; exit 1; }
           done
+          # ===== run#35: 2026-09-25 活体验证修复链固化 =====
+          # 真凶链(#34 实机定位): system/etc/task_profiles.json 缺失 -> logd 起跑 5ms 内
+          # SIGABRT 无限循环 -> keystore2 panic "Cannot connect to Keymint" 每 5s 崩溃 ->
+          # recovery 每秒轮询 IKeystoreService 永不成功 -> splash 卡死。
+          # 另: ueventd 缺 smcinvoke/dma_heap/RPMB 规则 -> qseecomd exit 255 ->
+          # keymint TA 加载失败不注册(与上一条叠加)。
+          # 修复(全部实机验证): 1) task_profiles.json 落位  2) keystore2/keymint 及私有库
+          # 换 A16 验证版(Lu TWRP 同款)  3) libc++.so 升 v35(旧版缺 __libcpp_verbose_abort)
+          # 4) ueventd 三组权限规则。符号级验证: 全镜像 GLOBAL 导入可解析(symcheck v2)。
+          # 红线: 不动 libz/libprocessgroup/libbase/libbinder/libutils/libcrypto(A16 版会
+          # 硬破坏 init/recovery/adbd 的 GLOBAL 导入, 实测 boot loop)。
+          AF="$GITHUB_WORKSPACE/prebuilts/aurora_fix"
+          [ -d "$AF" ] || { echo "!! prebuilts/aurora_fix 不存在"; exit 1; }
+          (cd "$AF" && find . -type f | while read -r F; do
+             T="$DT/recovery/root/${F#./}"
+             mkdir -p "$(dirname "$T")"
+             cp -f "$F" "$T"
+           done)
+          for MUSTA in system/etc/task_profiles.json system/lib64/libc++.so system/bin/keystore2 system/lib64/libkeystore2_crypto.so system/lib64/libkm_compat.so system/lib64/libkm_compat_service.so vendor/bin/hw/android.hardware.security.keymint-service-qti vendor/lib64/libqtikeymint.so; do
+            [ -f "$DT/recovery/root/$MUSTA" ] || { echo "!! aurora_fix 缺件: $MUSTA"; exit 1; }
+          done
+          [ "$(stat -c%s "$DT/recovery/root/system/bin/keystore2")" = "2377240" ] || { echo "!! keystore2 须 Lu A16 版(2377240B)"; exit 1; }
+          [ "$(stat -c%s "$DT/recovery/root/vendor/bin/hw/android.hardware.security.keymint-service-qti")" = "45312" ] || { echo "!! keymint 须 Lu A16 版(45312B)"; exit 1; }
+          grep -q '/dev/smcinvoke' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 smcinvoke 规则"; exit 1; }
+          grep -q '/dev/dma_heap/qcom' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 dma_heap 规则"; exit 1; }
+          grep -q '/dev/0:0:0' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 RPMB 规则"; exit 1; }
+          echo ">>> aurora_fix 集成完成: task_profiles + 安全链 A16 化 + ueventd 权限"
           # 4) recovery 服务加 stdio_to_kmsg — stdout 进内核日志, 挂死点在 dmesg 可见
           #    (#32 活体调试教训: init 丢弃 stdout, 挂死点成盲区)。
           #    搜索覆盖 bootable/recovery 与 bootable_recovery 两种 manifest 布局;
