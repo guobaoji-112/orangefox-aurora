@@ -151,9 +151,12 @@ jobs:
           # recovery ramdisk, 由 init.recovery.qcom.rc early-init insmod /vendor/lib/modules/*.ko 加载;
           # 缺了它们触屏彻底无效(实机 21:46 确认)。对策: 恢复整目录递归拷贝, 并在 OrangeFoxConfig.mk
           # 打开官方豁免变量 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true 放行拷贝中的 ELF 模块。
-          sed -i 's|find-copy-subdir-files,\*,device/xiaomi/sm8650/prebuilts/aurora/firmware,recovery/root/vendor/firmware|find-copy-subdir-files,*,device/xiaomi/sm8650/prebuilts/aurora,recovery/root/vendor|' $DT/twrp_aurora.mk
-          grep -q 'prebuilts/aurora,recovery/root/vendor' $DT/twrp_aurora.mk   # fail-fast: 整目录递归已恢复
-          ! grep -q 'prebuilts/aurora/firmware,recovery/root/vendor/firmware' $DT/twrp_aurora.mk   # fail-fast: 收窄版已消失
+          # run#32: prebuilts/aurora 整目录拷贝线彻底移除 —— 触屏固件(错误变体, 会重刷坏 IC 致
+          # 触摸上报瘫痪, #31 实测)与错版 .ko(CRC 不符)两大毒性源头均在此目录; 正确件改由
+          # prebuilts/houji_port 提供(odm 固件 = 手机 /odm/firmware 原版 + aurora THP 配置;
+          # 模块 = 手机 vendor_dlkm 原版, 实测加载成功)。
+          sed -i '\|device/xiaomi/sm8650/prebuilts/aurora|d' $DT/twrp_aurora.mk
+          ! grep -q 'prebuilts/aurora' $DT/twrp_aurora.mk || { echo "!! twrp_aurora.mk 仍引用 prebuilts/aurora"; exit 1; }
           cp -v "$GITHUB_WORKSPACE/OrangeFoxConfig.mk" $DT/
           # fail-fast: 豁免变量必须已在配置中(触屏驱动放行的关键开关)
           grep -q 'BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true' $DT/OrangeFoxConfig.mk || { echo "!! 缺少 ELF 豁免变量, 触屏驱动将被 check-non-elf 硬错拦截"; exit 1; }
@@ -166,59 +169,70 @@ jobs:
             grep -q 'inlinecrypt_optimized+wrappedkey_v0' "$F" && { echo ">>> fstab 已修正: $F"; FSTAB_N=$((FSTAB_N+1)); }
           done
           [ "$FSTAB_N" -ge 1 ] || { echo "!! 未找到/未修正含 ICE 加密标志的 fstab"; grep -rl 'fileencryption' $DT | head -5; exit 1; }
-          # run#25 解密引擎移植: RWA82 树不含 prepdecrypt/qseecomd/keymint HAL/keystore2 任何组件
-          # (纸面核实 recovery/root 与 prebuilts/aurora 均无) —— 这是 v1 解密失败的第二根因。
-          # Kyuofox(同机型 TWRP, 实机验证可解密)整套解密组件已收录进本仓库 prebuilts/decrypt/,
-          # 原样进 recovery/root, 不走 PRODUCT_COPY_FILES, 因此不受 check-non-elf ELF 检查限制。
-          # 通用基础库(libc/libc++/libicu 等)用 no-clobber: 橙狐自带版本优先, 保 ABI 一致;
-          # 解密专属库橙狐缺失, 全部落位。init.recovery.qcom.rc 换 Kyuofox 版(含完整解密触发链:
-          # setpatch/install_keyring/start prepdecrypt.vendor/start keystore2/qseecomd)。
-          # insmod 触屏段不再回填: RWA82 预编译 .ko 与手机内核 6.1.138 符号 CRC 不一致,
-          # insmod 必然失败(#26 dmesg 实锤), 触屏改走 fstab vendor_dlkm 正规加载链;
-          # 但 #26 重构把 MIUI rc 的 backlight/USB gadget 行一并删掉 → #27 实机黑屏。
-          # #28 已把 backlight=200 + configfs/UDC 三段回填进 prebuilts/decrypt 版 rc。
-          # run#30 对分构建: FOX_DECRYPT=0 时整体跳过解密段, ramdisk 回到 #24 等价状态。
-          # 目的: 切分「橙狐上游漂移」vs「解密栈/rc/fstab 替换」两大嫌疑 ——
-          #   #30 能进 UI → 嫌疑在解密段, 逐件加回定位;
-          #   #30 仍黑屏 → 嫌疑在上游漂移(#24 与 #27 两次 sync 间隔上游动过), 需钉住 manifest。
-          # 恢复解密: 去掉 FOX_DECRYPT=0 即可。
-          export FOX_DECRYPT=0
-          if [ "${FOX_DECRYPT:-1}" = "1" ]; then
-          DS="$GITHUB_WORKSPACE/prebuilts/decrypt"
-          [ -d "$DS" ] || { echo "!! prebuilts/decrypt 不存在"; exit 1; }
-          cp -f "$DS/init.recovery.qcom.rc" "$DT/recovery/root/init.recovery.qcom.rc"
-          # fail-fast: 背光行必须在(#27 实机黑屏根因, 缺它屏幕必黑)
-          grep -q 'panel0-backlight/brightness' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺背光行, 黑屏回归"; exit 1; }
-          for SUB in vendor system; do
-            (cd "$DS/$SUB" && find . -type d -exec mkdir -p "$DT/recovery/root/$SUB/{}" \;)
-            (cd "$DS/$SUB" && find . -type f | while read -r F; do
-               T="$DT/recovery/root/$SUB/${F#./}"
-               if [ ! -e "$T" ]; then cp -f "$F" "$T"; fi
-             done)
+          # run#25 解密引擎移植(历史): RWA82 树不含 prepdecrypt/qseecomd/keymint HAL/keystore2
+          # 组件 —— v1 解密失败根因之一。曾用 Kyuofox 预编译组件 no-clobber 方案(#25-#29),
+          # 实测全数黑屏/循环后废弃; run#32 起改为 houji 参考卷对齐方案(见下方houji_port段):
+          # 完整高通 vendor 库 92 个 + THP 触屏管线 + SELinux 宽容 + 分阶段服务启动。
+          # 历史教训链: #26 删 insmod 段连累 backlight/USB 行 → #27 黑屏; #28 回填无效(init
+          # 未活到 rc 执行); #29 剥 avb_keys 亦无效; #30 对分锁定解密段; #31 锁定 fstab 整换。
+          # run#32 对齐版(2026-09-25): 以能用的 houji 参考卷(小米14, 同 fox_14.1/A14/SM8650)
+          # 为标准答案重建解密+触屏集成。对分判决: #30 纯净版能开机; 解密段(Kyuofox rc+残缺栈)
+          # 黑屏元凶(#27-29); Kyuofox fstab 整文件替换延迟重启循环元凶(#31)。
+          # houji 参考卷裁决的四大修正:
+          #   1. SELinux early-init 即宽容(enforce 0) —— 外挂服务不触碰策略红线
+          #   2. 解密栈 = 完整高通 vendor 库 92 个全量移植(补齐 #29 缺的 11 条依赖:
+          #      libQSEEComAPI/libqcbor/libminkdescriptor/libion/libmemunreachable/libqmi 全家桶)
+          #   3. 触屏 = THP 用户态管线: ramdisk 内核匹配模块(手机 vendor_dlkm 原版)insmod →
+          #      twrp.modules.loaded=true → start touch_report(THP 管线, 缺它驱动收不到触摸数据)
+          #      → start qseecomd; 模块加载前不启动(houji 注释: 早启动会 ghost touch)
+          #   4. 触屏固件 = 正确 odm 版(210,711B, 手机 /odm/firmware 原件)放 vendor/odm/firmware/;
+          #      RWA82 旧版(210,696B)严禁进 ramdisk —— #31 实测会重刷 IC 致触摸上报瘫痪
+          export HP="$GITHUB_WORKSPACE/prebuilts/houji_port"
+          [ -d "$HP" ] || { echo "!! prebuilts/houji_port 不存在"; exit 1; }
+          # rc: houji 版 + aurora 适配(背光/USB 块/insmod/触发属性已内置)
+          cp -f "$HP/init.recovery.qcom.rc" "$DT/recovery/root/init.recovery.qcom.rc"
+          cp -f "$HP/init.recovery.usb.rc" "$DT/recovery/root/init.recovery.usb.rc"
+          # fstab: Kyuofox 剥 avb_keys 版(#31 实证对开机无害, 结构与 houji 一致)
+          cp -f "$GITHUB_WORKSPACE/prebuilts/decrypt/recovery.fstab" "$DT/recovery/root/system/etc/recovery.fstab"
+          # rc 关键行逐项断言
+          grep -q 'panel0-backlight/brightness' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺背光行"; exit 1; }
+          grep -q 'enforce 0' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 SELinux 宽容"; exit 1; }
+          grep -q 'LD_LIBRARY_PATH' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺库搜索路径"; exit 1; }
+          grep -q 'insmod /vendor/lib/modules/synaptics_tcm2.ko' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺触屏模块加载"; exit 1; }
+          grep -q 'setprop twrp.modules.loaded true' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺模块加载触发"; exit 1; }
+          grep -q 'start touch_report' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 THP 管线启动"; exit 1; }
+          grep -q 'start vendor.keymint-qti' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 keymint 触发"; exit 1; }
+          grep -q 'start vendor.qseecomd' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 qseecomd 启动"; exit 1; }
+          # 服务定义 + 二进制 + 完整高通库 + odm 层
+          mkdir -p "$DT/recovery/root/vendor/etc/init" "$DT/recovery/root/vendor/bin/hw" \
+                   "$DT/recovery/root/vendor/lib64" "$DT/recovery/root/vendor/odm/etc" \
+                   "$DT/recovery/root/vendor/odm/firmware" "$DT/recovery/root/vendor/lib/modules"
+          cp -f "$HP/vendor/etc/init/"*.rc "$DT/recovery/root/vendor/etc/init/"
+          cp -rf "$HP/vendor/bin/." "$DT/recovery/root/vendor/bin/"
+          cp -f "$HP/vendor/lib64/"*.so "$DT/recovery/root/vendor/lib64/"
+          cp -f "$HP/vendor/lib/modules/"*.ko "$DT/recovery/root/vendor/lib/modules/"
+          cp -f "$HP/vendor/odm/etc/ueventd.rc" "$DT/recovery/root/vendor/odm/etc/ueventd.rc"
+          cp -f "$HP/vendor/odm/firmware/"* "$DT/recovery/root/vendor/odm/firmware/"
+          chmod 0755 "$DT/recovery/root/vendor/bin/qseecomd" "$DT/recovery/root/vendor/bin/ssgtzd" \
+                      "$DT/recovery/root/vendor/bin/se_omapi" "$DT/recovery/root/vendor/bin/touch_report" \
+                      "$DT/recovery/root/vendor/bin/hw/"* 2>/dev/null || true
+          # prepdecrypt.sh 用 Kyuofox aurora 专属版(houji 版为本机型不适用的他机脚本)
+          cp -f "$GITHUB_WORKSPACE/prebuilts/decrypt/vendor/bin/prepdecrypt.sh" "$DT/recovery/root/vendor/bin/prepdecrypt.sh"
+          chmod 0755 "$DT/recovery/root/vendor/bin/prepdecrypt.sh"
+          # 断言: #29 曾缺失的 11 条依赖对应的库必须全部落位 + 管线二进制 + 正确固件
+          for MUST in vendor/lib64/libQSEEComAPI.so vendor/lib64/libqcbor.so vendor/lib64/libminkdescriptor.so \
+                      vendor/lib64/libion.so vendor/lib64/libmemunreachable.so vendor/lib64/libdrmfs.so \
+                      vendor/lib64/libqmi.so vendor/lib64/libqtikeymint.so vendor/lib64/libjc_keymint_nxp.so \
+                      vendor/lib64/libtensorflowlite_touch_c.so vendor/lib64/libtouchsensor.so \
+                      vendor/bin/touch_report vendor/bin/qseecomd vendor/odm/firmware/synaptics_spi_aurora.img; do
+            [ -f "$DT/recovery/root/$MUST" ] || { echo "!! houji_port 缺件: $MUST"; exit 1; }
           done
-          find "$DT/recovery/root/vendor/bin" "$DT/recovery/root/system/bin" -type f -exec chmod 0755 {} \; 2>/dev/null || true
-          # fail-fast: 解密栈关键件必须全部落位
-          for MUST in vendor/bin/prepdecrypt.sh vendor/bin/qseecomd vendor/etc/init/prepdecrypt.rc \
-                      vendor/etc/init/qseecomd.rc vendor/bin/hw/android.hardware.security.keymint-service-qti \
-                      vendor/lib64/libkeymaster_portable.so vendor/lib64/libkeymasterdeviceutils.so \
-                      system/bin/keystore2 system/bin/fscryptpolicyget system/etc/init/keystore2.rc \
-                      system/lib64/libkeymint_support.so system/lib64/android.system.keystore2-V5-ndk.so; do
-            [ -f "$DT/recovery/root/$MUST" ] || { echo "!! 解密栈缺件: $MUST"; exit 1; }
-          done
-          grep -q 'start prepdecrypt.vendor' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! prepdecrypt 触发丢失"; exit 1; }
-          echo ">>> 解密栈落位完成: $(find $DT/recovery/root/vendor/bin $DT/recovery/root/system/bin -type f | wc -l) 个可执行件"
-          fi   # FOX_DECRYPT 门结束(run#30 对分)
-          # run#31 对分第二步: 仅单独加回 Kyuofox fstab(avb_keys 已剥版, 触屏修复核心件),
-          # rc 与解密文件仍在门外 —— 若 #31 仍能进 UI 且触屏复活, 则 fstab 无罪, 继续测 rc/文件;
-          # 若 #31 黑屏, 则 fstab 是凶手(剩余嫌疑只剩 rc 与解密文件二选一)。
-          # 触屏机理(run#26 dmesg 定案): 树原版 fstab 缺 vendor_dlkm/system_dlkm first_stage_mount
-          # 条目, 与手机内核匹配的触屏模块在 super 的 vendor_dlkm 动态分区里永不挂载 → 触屏死;
-          # RWA82 自带 .ko 是另一内核变体编译(CRC 不符)不可用; Kyuofox fstab 自带正确挂载条目。
-          DSF="$GITHUB_WORKSPACE/prebuilts/decrypt"
-          cp -f "$DSF/recovery.fstab" "$DT/recovery/root/system/etc/recovery.fstab"
-          grep -q 'vendor_dlkm' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 vendor_dlkm 挂载条目"; exit 1; }
-          grep -q 'wrappedkey_v0' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 缺 FBE v2 wrappedkey 标志"; exit 1; }
-          ! grep -q 'avb_keys=' "$DT/recovery/root/system/etc/recovery.fstab" || { echo "!! fstab 残留 avb_keys 而 ramdisk 无 /avb 密钥"; exit 1; }
+          # 断言: RWA82 旧触屏固件严禁进 ramdisk 的 vendor/firmware(正确版只允许在 odm/firmware)
+          BADFW=$(find "$DT/recovery/root/vendor/firmware" -name 'synaptics_spi_aurora.img' 2>/dev/null | wc -l)
+          [ "$BADFW" = "0" ] || { echo "!! RWA82 触屏固件混入 vendor/firmware(会重刷坏 IC)"; exit 1; }
+          # 断言: 内核匹配触屏模块在 ramdisk
+          [ -f "$DT/recovery/root/vendor/lib/modules/synaptics_tcm2.ko" ] || { echo "!! 缺内核匹配触屏模块"; exit 1; }
+          echo ">>> houji_port 集成完成: $(find $DT/recovery/root/vendor/lib64 -name '*.so' | wc -l) 库 / $(find $DT/recovery/root/vendor/bin -type f | wc -l) 可执行件 / odm 固件+模型就位"
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。
