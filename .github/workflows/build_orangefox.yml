@@ -282,6 +282,10 @@ jobs:
           grep -q '/dev/smcinvoke' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 smcinvoke 规则"; exit 1; }
           grep -q '/dev/dma_heap/qcom' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 dma_heap 规则"; exit 1; }
           grep -q '/dev/0:0:0' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 RPMB 规则"; exit 1; }
+          # 画图案解密链: gatekeeper/weaver/keymint 必须以 on-init 启动(Lu 对齐, 晚启动会卡死)
+          grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.gatekeeper-service-qti.rc" || { echo "!! gatekeeper rc 缺 on-init 启动"; exit 1; }
+          grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.security.keymint-service-qti.rc" || { echo "!! keymint rc 缺 on-init 启动"; exit 1; }
+          grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.weaver-service.nxp.rc" || { echo "!! weaver rc 缺 on-init 启动"; exit 1; }
           echo ">>> aurora_fix 集成完成: task_profiles + 安全链 A16 化 + ueventd 权限"
           # 4) recovery 服务加 stdio_to_kmsg — stdout 进内核日志, 挂死点在 dmesg 可见
           #    (#32 活体调试教训: init 丢弃 stdout, 挂死点成盲区)。
