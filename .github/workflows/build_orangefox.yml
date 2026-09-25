@@ -233,6 +233,42 @@ jobs:
           # 断言: 内核匹配触屏模块在 ramdisk
           [ -f "$DT/recovery/root/vendor/lib/modules/synaptics_tcm2.ko" ] || { echo "!! 缺内核匹配触屏模块"; exit 1; }
           echo ">>> houji_port 集成完成: $(find $DT/recovery/root/vendor/lib64 -name '*.so' | wc -l) 库 / $(find $DT/recovery/root/vendor/bin -type f | wc -l) 可执行件 / odm 固件+模型就位"
+          # ===== run#33: TWRP 满分卷安全件全量对齐 (2026-09-25 #32 活体调试战果固化) =====
+          # 1) TA 固件40件(firmware_mnt/image UUID.mbn 含 keymaster TA) — TWRP 的 firmware_mnt
+          #    是 ramdisk 自带而非挂载; 没有 TA → keymint 无法加载 keymaster TA → keystore2
+          #    无法注册 IKeystoreService → 解密死。
+          # 2) libdmabufheap.so + libc++-v35.so — houji 放 system/lib64 我们只搬 vendor 侧,
+          #    缺它们 qseecomd exit 255 / keymint SIGABRT。双位落位(system+vendor)。
+          # 3) vendor/lib64/hw(libqtigatekeeper/libEseUtils) + vendor/etc/vintf 清单 +
+          #    gpfspath_oem_config.xml + ssg/ta_config.json + charger_fw_fstab.qti。
+          TF="$GITHUB_WORKSPACE/prebuilts/tw_fill"
+          [ -d "$TF" ] || { echo "!! prebuilts/tw_fill 不存在"; exit 1; }
+          (cd "$TF" && find . -type f | while read -r F; do
+             T="$DT/recovery/root/${F#./}"
+             mkdir -p "$(dirname "$T")"
+             cp -f "$F" "$T"
+           done)
+          TAC=$(find "$DT/recovery/root/vendor/firmware_mnt/image" -type f 2>/dev/null | wc -l)
+          [ "$TAC" -ge 40 ] || { echo "!! TA 固件不足($TAC<40)"; exit 1; }
+          for MUSTF in system/lib64/libdmabufheap.so system/lib64/libc++-v35.so \
+                       vendor/lib64/libdmabufheap.so vendor/lib64/libc++-v35.so \
+                       vendor/lib64/hw/libqtigatekeeper.so vendor/etc/gpfspath_oem_config.xml \
+                       vendor/etc/ssg/ta_config.json vendor/etc/vintf/manifest.xml; do
+            [ -f "$DT/recovery/root/$MUSTF" ] || { echo "!! tw_fill 缺件: $MUSTF"; exit 1; }
+          done
+          # 4) recovery 服务加 stdio_to_kmsg — stdout 进内核日志, 挂死点在 dmesg 可见
+          #    (#32 活体调试教训: init 丢弃 stdout, 挂死点成盲区)
+          RCPATCH=0
+          for F in $(grep -rl "service recovery /system/bin/recovery" \
+                     $GITHUB_WORKSPACE/bootable_recovery $GITHUB_WORKSPACE/device \
+                     $GITHUB_WORKSPACE/vendor 2>/dev/null); do
+            if ! grep -q stdio_to_kmsg "$F"; then
+              sed -i "s|service recovery /system/bin/recovery|service recovery /system/bin/recovery\n    stdio_to_kmsg|" "$F"
+              RCPATCH=$((RCPATCH+1))
+            fi
+          done
+          [ "$RCPATCH" -ge 1 ] || { echo "!! 未找到 recovery 服务 rc 可补 stdio_to_kmsg"; exit 1; }
+          echo ">>> tw_fill 安全件就位: TA=$TAC / stdio_to_kmsg 补丁 $RCPATCH 处"
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。
