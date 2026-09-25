@@ -257,18 +257,23 @@ jobs:
             [ -f "$DT/recovery/root/$MUSTF" ] || { echo "!! tw_fill 缺件: $MUSTF"; exit 1; }
           done
           # 4) recovery 服务加 stdio_to_kmsg — stdout 进内核日志, 挂死点在 dmesg 可见
-          #    (#32 活体调试教训: init 丢弃 stdout, 挂死点成盲区)
+          #    (#32 活体调试教训: init 丢弃 stdout, 挂死点成盲区)。
+          #    搜索覆盖 bootable/recovery 与 bootable_recovery 两种 manifest 布局;
+          #    找不到时仅告警不失败(调试辅助非正确性门槛)。
           RCPATCH=0
           for F in $(grep -rl "service recovery /system/bin/recovery" \
-                     $GITHUB_WORKSPACE/bootable_recovery $GITHUB_WORKSPACE/device \
+                     $GITHUB_WORKSPACE/bootable* $GITHUB_WORKSPACE/device \
                      $GITHUB_WORKSPACE/vendor 2>/dev/null); do
             if ! grep -q stdio_to_kmsg "$F"; then
               sed -i "s|service recovery /system/bin/recovery|service recovery /system/bin/recovery\n    stdio_to_kmsg|" "$F"
               RCPATCH=$((RCPATCH+1))
             fi
           done
-          [ "$RCPATCH" -ge 1 ] || { echo "!! 未找到 recovery 服务 rc 可补 stdio_to_kmsg"; exit 1; }
-          echo ">>> tw_fill 安全件就位: TA=$TAC / stdio_to_kmsg 补丁 $RCPATCH 处"
+          if [ "$RCPATCH" = "0" ]; then
+            echo "!! WARN: 未找到 recovery 服务 rc, stdio_to_kmsg 未注入(本轮 dmesg 无 stdout 可见性)"
+          else
+            echo ">>> stdio_to_kmsg 已注入 $RCPATCH 处"
+          fi
           # fail-fast (#20 定案): 值内嵌双引号经 orangefox.mk 的 -DVAR='"$(VAR)"' 再包一层,
           # 展开成 ""xxx → C++11 user-defined-literal 硬错(orscmd.o <command line>:28:25)。
           # 源头拦截: 配置里出现带引号的值直接失败, 不烧 60 分钟到 s8 才炸。
