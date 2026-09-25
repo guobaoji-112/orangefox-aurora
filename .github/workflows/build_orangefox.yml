@@ -274,7 +274,7 @@ jobs:
              mkdir -p "$(dirname "$T")"
              cp -f "$F" "$T"
            done)
-          for MUSTA in system/etc/task_profiles.json system/lib64/libc++.so system/bin/keystore2 system/lib64/libkeystore2_crypto.so system/lib64/libkm_compat.so system/lib64/libkm_compat_service.so vendor/bin/hw/android.hardware.security.keymint-service-qti vendor/lib64/libqtikeymint.so; do
+          for MUSTA in system/etc/task_profiles.json system/lib64/libc++.so system/bin/se_omapi system/lib64/android.se.omapi-V1-ndk.so system/lib64/libcppbor.so system/etc/vintf/manifest.xml vendor/bin/hw/android.hardware.security.keymint-service-qti vendor/lib64/libqtikeymint.so; do
             [ -f "$DT/recovery/root/$MUSTA" ] || { echo "!! aurora_fix 缺件: $MUSTA"; exit 1; }
           done
           grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.gatekeeper-service-qti.rc" || { echo "!! gatekeeper rc 缺 on-init 启动"; exit 1; }
