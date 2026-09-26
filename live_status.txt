@@ -93,3 +93,9 @@ Swap:          32767         272       32495
 Mem:           15988        5127        1389          21        9472       10245
 Swap:          32767         272       32495
 [ 57% 16414/28548] //system/core/fs_mgr/libsnapshot:libsnapshot_cow clang++ libsnapshot_cow/cow_reader.cpp (priority: 14)
+== t=17 09-26 10:37:35 ==
+/dev/root       146G  129G   17G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5046        1198          21        9743       10326
+Swap:          32767         272       32495
+[ 63% 18029/28548] //system/core/fs_mgr/libfs_avb:libfs_avb clang++ fs_avb_util.cpp (priority: 13)
