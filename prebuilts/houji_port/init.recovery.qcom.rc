@@ -29,6 +29,11 @@ on early-init
     wait /sys/fs/selinux/enforce
     write /sys/fs/selinux/enforce 0
 
+on early-init
+    # eSE 驱动: nxp-nci (SecureElement/weaver/strongbox 的 eSE 硬件依赖)
+    # 不加载则 HAL 报 Unknown eSE HW 崩溃循环, weaver 取密钥失败, CE 无法解密
+    insmod /vendor/lib/modules/nxp-nci.ko
+
 on init
     start vendor.boot-qti
     setprop prepdecrypt.setpatch true

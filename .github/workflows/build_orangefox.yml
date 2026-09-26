@@ -280,6 +280,8 @@ jobs:
           grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.gatekeeper-service-qti.rc" || { echo "!! gatekeeper rc 缺 on-init 启动"; exit 1; }
           grep -q 'is_security_level_spu' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 is_security_level_spu 属性"; exit 1; }
           [ -f "$DT/recovery/root/system/bin/se_omapi" ] || { echo "!! 缺 se_omapi (weaver 取密钥链)"; exit 1; }
+          [ -f "$DT/recovery/root/vendor/lib/modules/nxp-nci.ko" ] || { echo "!! 缺 eSE 驱动 nxp-nci.ko"; exit 1; }
+          grep -q 'nxp-nci.ko' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 eSE 驱动加载"; exit 1; }
           [ "$(stat -c%s "$DT/recovery/root/vendor/bin/hw/android.hardware.security.keymint-service-qti")" = "45312" ] || { echo "!! keymint 须 Lu A16 版(45312B)"; exit 1; }
           grep -q '/dev/smcinvoke' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 smcinvoke 规则"; exit 1; }
           grep -q '/dev/dma_heap/qcom' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" || { echo "!! ueventd 缺 dma_heap 规则"; exit 1; }
