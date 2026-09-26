@@ -75,3 +75,9 @@ Swap:          32767         274       32493
 Mem:           15988        5488        1886          21        8613        9884
 Swap:          32767         272       32495
 [ 45% 13014/28548] //external/zstd:libzstd clang lib/compress/zstd_double_fast.c (priority: 17)
+== t=14 09-26 10:28:31 ==
+/dev/root       146G  128G   18G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5183        1964          21        8841       10189
+Swap:          32767         272       32495
+[ 48% 13949/28548] //system/vold:libvold clang++ EncryptInplace.cpp (priority: 16)
