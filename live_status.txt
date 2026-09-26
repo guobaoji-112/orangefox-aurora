@@ -15,3 +15,9 @@ Swap:          32767        4419       28348
 Mem:           15988       14100         267           8        1620        1284
 Swap:          32767       14803       17964
 [ 99% 1161/1162] cp /home/runner/fox_14.1/out/host/linux-x86/bin/soong_build
+== t=4 09-26 09:58:17 ==
+/dev/root       146G  125G   21G  86% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5867        3868          10        6252        9516
+Swap:          32767         302       32465
+[  4% 1399/28548] //prebuilts/rust:libcore.rust_sysroot rustc linux-x86/1.75.0/src/stdlibs/library/core/src/lib.rs (priority: 57)
