@@ -63,3 +63,9 @@ Swap:          32767         276       32491
 Mem:           15988        5023        2939          21        8025       10349
 Swap:          32767         275       32492
 [ 37% 10600/28548] //external/libchrome:libchrome clang++ base/strings/string_util_constants.cc (priority: 19)
+== t=12 09-26 10:22:28 ==
+/dev/root       146G  128G   19G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5086        2600          21        8301       10286
+Swap:          32767         274       32493
+[ 40% 11672/28548] //hardware/interfaces/keymaster/4.0/support:libkeymaster4support generate toc libkeymaster4support.so [arm] (priority: 18)
