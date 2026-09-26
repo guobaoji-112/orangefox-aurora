@@ -39,3 +39,9 @@ Swap:          32767         286       32481
 Mem:           15988        5516        2781          20        7691        9857
 Swap:          32767         282       32485
 [ 13% 3979/28548] //system/keymaster:libpuresoftkeymasterdevice clang++ android_keymaster/keymaster_configuration.cpp (priority: 31)
+== t=8 09-26 10:10:22 ==
+/dev/root       146G  127G   19G  87% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5095        2796          21        8097       10277
+Swap:          32767         280       32487
+[ 22% 6320/28548] //bionic/libc:libc clang arch-common/bionic/crtend_so.S (priority: 26)
