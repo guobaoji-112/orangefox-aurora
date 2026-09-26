@@ -45,3 +45,9 @@ Swap:          32767         282       32485
 Mem:           15988        5095        2796          21        8097       10277
 Swap:          32767         280       32487
 [ 22% 6320/28548] //bionic/libc:libc clang arch-common/bionic/crtend_so.S (priority: 26)
+== t=9 09-26 10:13:24 ==
+/dev/root       146G  127G   19G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5902        1620          21        8465        9470
+Swap:          32767         277       32490
+[ 28% 8095/28548] Copy symbols with mapping: /home/runner/fox_14.1/out/target/product/sm8650/symbols/system/lib64/libcrecovery.so (priority: 22)
