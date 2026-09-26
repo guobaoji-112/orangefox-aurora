@@ -111,3 +111,9 @@ Swap:          32767         271       32496
 Mem:           15988        5104         536          21       10348       10268
 Swap:          32767         269       32498
 [ 72% 20689/28548] //system/incremental_delivery/incfs:libincfs clang++ path.cpp [arm] (priority: 12)
+== t=20 09-26 10:46:39 ==
+/dev/root       146G  130G   16G  90% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        6022         485          21        9481        9350
+Swap:          32767         266       32501
+[ 76% 21889/28548] //system/core/init:init_second_stage strip init (priority: 11)
