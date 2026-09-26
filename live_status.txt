@@ -3,3 +3,9 @@
                total        used        free      shared  buff/cache   available
 Mem:           15988         743        8890          47        6354       14602
 Swap:          32767           1       32766
+== t=2 09-26 09:52:15 ==
+/dev/root       146G  121G   25G  83% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988       14552         297           7        1138         896
+Swap:          32767        4419       28348
+[ 99% 1161/1162] cp /home/runner/fox_14.1/out/host/linux-x86/bin/soong_build
