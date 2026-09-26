@@ -99,3 +99,9 @@ Swap:          32767         272       32495
 Mem:           15988        5046        1198          21        9743       10326
 Swap:          32767         272       32495
 [ 63% 18029/28548] //system/core/fs_mgr/libfs_avb:libfs_avb clang++ fs_avb_util.cpp (priority: 13)
+== t=18 09-26 10:40:36 ==
+/dev/root       146G  129G   17G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5100         840          21       10047       10271
+Swap:          32767         271       32496
+[ 66% 19112/28548] //external/selinux/libselinux:sefcontext_compile clang src/android/android.c [linux_glibc] (priority: 13)
