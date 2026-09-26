@@ -87,3 +87,9 @@ Swap:          32767         272       32495
 Mem:           15988        5378        1479          21        9131        9994
 Swap:          32767         272       32495
 [ 52% 14911/28548] //system/unwinding/libunwindstack:libunwindstack clang++ Demangle.cpp (priority: 15)
+== t=16 09-26 10:34:33 ==
+/dev/root       146G  129G   18G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5127        1389          21        9472       10245
+Swap:          32767         272       32495
+[ 57% 16414/28548] //system/core/fs_mgr/libsnapshot:libsnapshot_cow clang++ libsnapshot_cow/cow_reader.cpp (priority: 14)
