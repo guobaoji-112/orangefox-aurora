@@ -21,3 +21,9 @@ Swap:          32767       14803       17964
 Mem:           15988        5867        3868          10        6252        9516
 Swap:          32767         302       32465
 [  4% 1399/28548] //prebuilts/rust:libcore.rust_sysroot rustc linux-x86/1.75.0/src/stdlibs/library/core/src/lib.rs (priority: 57)
+== t=5 09-26 10:01:19 ==
+/dev/root       146G  126G   21G  87% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5755        3549          14        6683        9623
+Swap:          32767         294       32473
+[  5% 1673/28548] //system/tools/aidl:libaidl-common clang++ aidl_to_rust.cpp [linux_glibc] (priority: 50)
