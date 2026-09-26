@@ -117,3 +117,9 @@ Swap:          32767         269       32498
 Mem:           15988        6022         485          21        9481        9350
 Swap:          32767         266       32501
 [ 76% 21889/28548] //system/core/init:init_second_stage strip init (priority: 11)
+== t=21 09-26 10:49:40 ==
+/dev/root       146G  131G   15G  91% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5026         405          21       10557       10346
+Swap:          32767         265       32502
+[ 99% 28545/28548] ----- Making uncompressed recovery ramdisk ------ (priority: 4)
