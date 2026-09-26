@@ -81,3 +81,9 @@ Swap:          32767         272       32495
 Mem:           15988        5183        1964          21        8841       10189
 Swap:          32767         272       32495
 [ 48% 13949/28548] //system/vold:libvold clang++ EncryptInplace.cpp (priority: 16)
+== t=15 09-26 10:31:32 ==
+/dev/root       146G  128G   18G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5378        1479          21        9131        9994
+Swap:          32767         272       32495
+[ 52% 14911/28548] //system/unwinding/libunwindstack:libunwindstack clang++ Demangle.cpp (priority: 15)
