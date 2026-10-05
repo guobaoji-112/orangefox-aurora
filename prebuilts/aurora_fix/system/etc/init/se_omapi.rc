@@ -1,21 +1,24 @@
-# #42 实机审计(2026-10-05): 启动时序是 weaver 取密钥失败的根因, 不是文件缺失。
+# #43 根因定位(2026-10-05, 符号级实证): se_omapi 此前**从未运行过**, 失败在链接层。
 #
-# 原 on late-init 触发过早: AIDL OMAPI 服务端启动后立刻向 SecureElement HAL
-# 请求 ISecureElement/eSE1, 但此时 hwservicemanager 尚未完成 vendor HAL 注册
-# → getService 返回 UNKNOWN_ERROR → se_omapi abort → weaver 的 OMAPI 通道
-#   永远拿不到服务端 → "Failed to get weaver key size"。
+# 硬缺失符号: AIBinder_Class_setTransactionCodeToFunctionNameMap
+#   被 A16 版 android.hardware.secure_element-V1-ndk.so / android.se.omapi-V1-ndk.so 引用,
+#   从 libbinder_ndk.so 取该符号, 而 A14 树内 libbinder_ndk 不导出它(A16 新增)。
+#   → 链接器直接拒绝加载:
+#     CANNOT LINK EXECUTABLE "/system/bin/se_omapi"
+#   → OMAPI 通道永远没有服务端 → weaver getKeySize 失败。
 #
-# vendor.sys.listeners.registered=true 才是 HAL 注册完成的唯一可靠信号
-# (init.recovery.qcom.rc 中 secure_element / weaver_nxp / gatekeeper 同批由此触发)。
-# 对齐到该信号, 保证 se_omapi 晚于 secure_element 就绪。
+# 修复(本次): 两个 V1-ndk 库回退为树内原生 A14 版(见 aurora_fix/system/lib64/),
+#   经 symcheck 全镜像符号闭包复算, 本链 3 处缺失全部消除。
+#
+# 时序修复(同批保留): 原 on late-init 早于 hwservicemanager 完成 vendor HAL 注册,
+#   se_omapi 起来后立刻请求 ISecureElement/eSE1 会得 UNKNOWN_ERROR 而 abort。
+#   vendor.sys.listeners.registered=true 是 HAL 就绪的唯一可靠信号, 对齐到该触发点。
 on property:vendor.sys.listeners.registered=true
     start se_omapi
 
 service se_omapi /system/bin/se_omapi
     class hal
     user root
-    # 对齐 secure_element 的权限模型: se_omapi 需访问 /dev/nq-nci 与 eSE 共享组,
-    # 纯 root 组在 recovery 域下可能被 ueventd 权限规则拒绝(见 ueventd.rc)。
-    group nfc root
+    group root
     interface aidl android.se.omapi.ISecureElementService/default
     seclabel u:r:recovery:s0
