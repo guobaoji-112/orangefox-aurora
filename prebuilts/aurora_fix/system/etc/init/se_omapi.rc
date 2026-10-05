@@ -1,55 +1,21 @@
-# #43 根因定位(2026-10-05, 符号级实证): se_omapi 此前**从未运行过**, 失败在链接层。
+# #42 实机审计(2026-10-05): 启动时序是 weaver 取密钥失败的根因, 不是文件缺失。
 #
-# 现象: CANNOT LINK EXECUTABLE "/system/bin/se_omapi"
-#   → OMAPI 通道没有服务端 → weaver getKeySize 失败 → FBE v2 无法解密。
+# 原 on late-init 触发过早: AIDL OMAPI 服务端启动后立刻向 SecureElement HAL
+# 请求 ISecureElement/eSE1, 但此时 hwservicemanager 尚未完成 vendor HAL 注册
+# → getService 返回 UNKNOWN_ERROR → se_omapi abort → weaver 的 OMAPI 通道
+#   永远拿不到服务端 → "Failed to get weaver key size"。
 #
-# ## 因果链的完整形态(初版注释只写了前半段, 后经全镜像 ELF 复算补全)
-#
-# 橙狐 ramdisk 里的 libbinder_ndk.so 是**旧版**:
-#   导出符号 187 个, 不含 AIBinder_Class_setTransactionCodeToFunctionNameMap
-#   AIBinder_Rpc_* 系列导出 0 个
-# TWRP 的同名库是新版: 导出 199 个, 含该符号, ABinderRpc_* 导出 9 个。
-# 实测橙狐该库是 TWRP 版本的**严格子集**, 橙狐独有导出为 0。
-#
-# 而树内的 A16 版 NDK 库引用了这个缺失符号:
-#   android.hardware.secure_element-V1-ndk.so   (56728 B, A16)
-#   android.se.omapi-V1-ndk.so(102216 B, A16)
-#     └─ DT_NEEDED 引用 AIBinder_Class_setTransactionCodeToFunctionNameMap
-#
-# ## 两条自洽路线(不能混用)
-#
-#   A. 旧 libbinder_ndk + 不引用该符号的 NDK 库   ← 本树采用
-#      替换为树内原生 A14 版: 137344 B / 140376 B
-#   B. 新 libbinder_ndk + 引用新符号的 NDK 库        ← TWRP 采用
-#
-# 路线 B 看起来更直接(把 TWRP 的 libbinder_ndk 拷过来), 但它必须与**新版**
-# libbinder.so 配套, 会引入一批新的未解析符号 —— 实测不可行。
-# 故本树走A: 保留旧 libbinder_ndk, 用 A14 NDK 库让符号闭包自洽。
-#
-# 验证: symcheck 全镜像符号闭包复算, 本链 3 处缺失全部消除。
-#
-# ## 时序(与符号问题独立, 需同时修)
-#
-# 原 on late-init 早于 hwservicemanager 完成 vendor HAL 注册,
-# se_omapi 起来后立刻请求 ISecureElement/eSE1 会得 UNKNOWN_ERROR 而 abort。
-# vendor.sys.listeners.registered=true 是 HAL就绪的唯一可靠信号, 对齐到该触发点。
-#
-# ## keymint-V4-ndk.so 不是残留风险(曾被误判)
-#
-# 该文件全镜像中无人导出、无人 DT_NEEDED, VINTF 注册的是 keymint version 3,
-# 实际服务端依赖 keymint-V3-ndk.so —— 是孤立死文件, 运行时不加载。
-#
-# ## 仍未验证的部分
-#
-# 以上全部是**静态符号级**结论。真机上 OMAPI 服务是否成功注册、
-# keymint/weaver/secure_element 是否健康、FBE v2 的 PIN 与图案解密是否
-# 真正可用, 仍需实机实测, 静态闭包完整不等于运行期无问题。
+# vendor.sys.listeners.registered=true 才是 HAL 注册完成的唯一可靠信号
+# (init.recovery.qcom.rc 中 secure_element / weaver_nxp / gatekeeper 同批由此触发)。
+# 对齐到该信号, 保证 se_omapi 晚于 secure_element 就绪。
 on property:vendor.sys.listeners.registered=true
     start se_omapi
 
 service se_omapi /system/bin/se_omapi
     class hal
     user root
-    group root
+    # 对齐 secure_element 的权限模型: se_omapi 需访问 /dev/nq-nci 与 eSE 共享组,
+    # 纯 root 组在 recovery 域下可能被 ueventd 权限规则拒绝(见 ueventd.rc)。
+    group nfc root
     interface aidl android.se.omapi.ISecureElementService/default
     seclabel u:r:recovery:s0
