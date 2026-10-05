@@ -1,9 +1,21 @@
-on late-init
+# #42 实机审计(2026-10-05): 启动时序是 weaver 取密钥失败的根因, 不是文件缺失。
+#
+# 原 on late-init 触发过早: AIDL OMAPI 服务端启动后立刻向 SecureElement HAL
+# 请求 ISecureElement/eSE1, 但此时 hwservicemanager 尚未完成 vendor HAL 注册
+# → getService 返回 UNKNOWN_ERROR → se_omapi abort → weaver 的 OMAPI 通道
+#   永远拿不到服务端 → "Failed to get weaver key size"。
+#
+# vendor.sys.listeners.registered=true 才是 HAL 注册完成的唯一可靠信号
+# (init.recovery.qcom.rc 中 secure_element / weaver_nxp / gatekeeper 同批由此触发)。
+# 对齐到该信号, 保证 se_omapi 晚于 secure_element 就绪。
+on property:vendor.sys.listeners.registered=true
     start se_omapi
 
 service se_omapi /system/bin/se_omapi
     class hal
     user root
-    group root
+    # 对齐 secure_element 的权限模型: se_omapi 需访问 /dev/nq-nci 与 eSE 共享组,
+    # 纯 root 组在 recovery 域下可能被 ueventd 权限规则拒绝(见 ueventd.rc)。
+    group nfc root
     interface aidl android.se.omapi.ISecureElementService/default
     seclabel u:r:recovery:s0

@@ -290,6 +290,28 @@ jobs:
           grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.gatekeeper-service-qti.rc" || { echo "!! gatekeeper rc 缺 on-init 启动"; exit 1; }
           grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.security.keymint-service-qti.rc" || { echo "!! keymint rc 缺 on-init 启动"; exit 1; }
           grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.weaver-service.nxp.rc" || { echo "!! weaver rc 缺 on-init 启动"; exit 1; }
+          # ===== run#42: weaver OMAPI 链启动时序断言 (2026-10-05 审计) =====
+          # 根因: se_omapi(AIDL OMAPI 服务端)原用 on late-init 启动, 早于 hwservicemanager
+          # 完成 vendor HAL 注册 → 向 SecureElement HAL 请求 ISecureElement/eSE1 得
+          # UNKNOWN_ERROR → abort → weaver OMAPI 通道无服务端 → "Failed to get weaver key size"。
+          # 修法: 触发条件对齐到 vendor.sys.listeners.registered=true(HAL 注册完成的唯一
+          # 可靠信号), 与 secure_element/weaver_nxp 同批。本断言防止回退到 late-init。
+          SEOMAPI_RC="$DT/recovery/root/system/etc/init/se_omapi.rc"
+          [ -f "$SEOMAPI_RC" ] || { echo "!! 缺 se_omapi.rc (weaver OMAPI 链服务端定义)"; exit 1; }
+          grep -q 'vendor.sys.listeners.registered' "$SEOMAPI_RC" \
+            || { echo "!! se_omapi 未对齐 HAL 就绪信号(须 on property:vendor.sys.listeners.registered), 会重现 weaver 取密钥失败"; exit 1; }
+          grep -q '^on late-init' "$SEOMAPI_RC" \
+            && { echo "!! se_omapi 仍用 on late-init, 早于 HAL 注册 → abort, 必须改为 vendor.sys.listeners.registered"; exit 1; }
+          grep -q 'start se_omapi' "$SEOMAPI_RC" || { echo "!! se_omapi rc 未定义 start 动作"; exit 1; }
+          grep -q 'android.se.omapi.ISecureElementService/default' "$SEOMAPI_RC" \
+            || { echo "!! se_omapi 缺 AIDL interface 声明, OMAPI 服务端不会被 hwservicemanager 绑定"; exit 1; }
+          # 权限模型对齐 secure_element: 需访问 /dev/nq-nci(eSE 设备节点)
+          grep -qE 'group .*(nfc|drmrpc)' "$SEOMAPI_RC" \
+            || { echo "!! se_omapi 权限组未对齐(须含 nfc 或 drmrpc), 可能被 ueventd 拒绝访问 /dev/nq-nci"; exit 1; }
+          # nq-nci 设备节点规则: 缺则 insmod 后节点权限默认 root:root, se_omapi 无法访问
+          grep -q 'nq-nci' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" \
+            || echo ">>> WARN: ueventd.rc 无 nq-nci 规则(eSE 节点权限可能不足, 实机若仍失败优先查此处)"
+
           echo ">>> aurora_fix 集成完成: task_profiles + 安全链 A16 化 + ueventd 权限"
           # 4) recovery 服务加 stdio_to_kmsg — stdout 进内核日志, 挂死点在 dmesg 可见
           #    (#32 活体调试教训: init 丢弃 stdout, 挂死点成盲区)。
