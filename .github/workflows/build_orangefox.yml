@@ -280,6 +280,85 @@ jobs:
           grep -q '^on init' "$DT/recovery/root/vendor/etc/init/android.hardware.gatekeeper-service-qti.rc" || { echo "!! gatekeeper rc 缺 on-init 启动"; exit 1; }
           grep -q 'is_security_level_spu' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 is_security_level_spu 属性"; exit 1; }
           [ -f "$DT/recovery/root/system/bin/se_omapi" ] || { echo "!! 缺 se_omapi (weaver 取密钥链)"; exit 1; }
+          # ===== run#43: se_omapi 链接层根因断言 (2026-10-05 符号级实证) =====
+          # se_omapi 从未运行过: A16 版 V1-ndk 库引用 A16 新增符号
+          # AIBinder_Class_setTransactionCodeToFunctionNameMap, A14 libbinder_ndk 不导出
+          # → CANNOT LINK EXECUTABLE → OMAPI 通道无服务端 → weaver getKeySize 失败。
+          # 修法: 两个 V1-ndk 库回退树内原生 A14 版。尺寸断言防再次混入 A16 版
+          # (A14: 137344/140376  A16: 56728/102216)。
+          [ "$(stat -c%s "$DT/recovery/root/system/lib64/android.hardware.secure_element-V1-ndk.so" 2>/dev/null)" = "137344" ] \
+            || { echo "!! secure_element-V1-ndk.so 非 A14 原生版(须 137344B, A16 版 56728B 会致链接失败)"; exit 1; }
+          [ "$(stat -c%s "$DT/recovery/root/system/lib64/android.se.omapi-V1-ndk.so" 2>/dev/null)" = "140376" ] \
+            || { echo "!! android.se.omapi-V1-ndk.so 非 A14 原生版(须 140376B, A16 版 102216B 会致链接失败)"; exit 1; }
+          # 符号闭包复算: 校验 se_omapi 及其 V1-ndk 依赖链无不可解析导入。
+          # 覆盖 run#43 教训: "文件在"不等于"能链接", 链接失败在实机才暴露。
+          cat > /tmp/symck.py <<'PYEOF'
+          import struct, sys, os
+          ROOT = sys.argv[1]
+          def elf(b):
+              if len(b) < 64 or b[:4] != b'\x7fELF' or b[4] != 2 or b[5] != 1: return None
+              sh = struct.unpack_from('<Q', b, 0x28)[0]
+              esz = struct.unpack_from('<H', b, 0x3a)[0]
+              num = struct.unpack_from('<H', b, 0x3c)[0]
+              if not sh or not num: return None
+              S = []
+              for i in range(num):
+                  o = sh + i * esz
+                  nm, tp = struct.unpack_from('<II', b, o)
+                  off, size = struct.unpack_from('<QQ', b, o + 24)
+                  link = struct.unpack_from('<I', b, o + 40)[0]
+                  ent = struct.unpack_from('<Q', b, o + 56)[0]
+                  S.append((tp, off, size, link, ent))
+              def strtab(idx):
+                  t = S[idx]; d = b[t[1]:t[1] + t[2]]; out = {}
+                  p = 0
+                  while p < len(d):
+                      e = d.find(b'\0', p)
+                      if e < 0: break
+                      out[p] = d[p:e].decode(errors='replace'); p = e + 1
+                  return out
+              imp, exp = set(), set()
+              for tp, off, size, link, ent in S:
+                  if tp != 11: continue
+                  st = strtab(link); p = off
+                  while p + 24 <= off + size:
+                      nm, info, other, shndx = struct.unpack_from('<IBBH', b, p)
+                      if nm in st:
+                          s = st[nm]
+                          if shndx == 0:
+                              if (info >> 4) != 2: imp.add(s)
+                          else: exp.add(s)
+                      p += 24
+              return imp, exp
+          files = {}
+          for dp, _, fs in os.walk(ROOT):
+              for f in fs:
+                  fp = os.path.join(dp, f)
+                  try: files[os.path.relpath(fp, ROOT).replace(os.sep, '/')] = open(fp, 'rb').read()
+                  except Exception: pass
+          U, I = set(), {}
+          for n, c in files.items():
+              if len(c) < 64: continue
+              if not (n.endswith('.so') or '/bin/' in n): continue
+              r = elf(c)
+              if not r: continue
+              U |= r[1]; I[n] = r[0]
+          bad = {}
+          for n, i in I.items():
+              m = sorted(s for s in i if s not in U)
+              if m: bad[n] = m
+          # 动态链接器自解析符号(dl* 系列)为基线固有, 非本次引入, 排除
+          IGN = ('der_dlerror', 'der_android_dlopen_ext')
+          for k in list(bad): bad[k] = [s for s in bad[k] if s not in IGN]
+          bad = {k: v for k, v in bad.items() if v}
+          if bad:
+              print('!! 符号闭包不完整(链接期硬错):')
+              for k, v in bad.items(): print('   ', k, '->', v)
+              sys.exit(1)
+          print('>>> 符号闭包 PASS:', len(I), '个 ELF, 导出全集', len(U))
+          PYEOF
+          python3 /tmp/symck.py "$DT/recovery/root" || { echo "!! 符号闭包校验失败(见上), 镜像将无法链接加载"; exit 1; }
+
           [ -f "$DT/recovery/root/vendor/lib/modules/nxp-nci.ko" ] || { echo "!! 缺 eSE 驱动 nxp-nci.ko"; exit 1; }
           grep -q 'nxp-nci.ko' "$DT/recovery/root/init.recovery.qcom.rc" || { echo "!! rc 缺 eSE 驱动加载"; exit 1; }
           [ "$(stat -c%s "$DT/recovery/root/vendor/bin/hw/android.hardware.security.keymint-service-qti")" = "45312" ] || { echo "!! keymint 须 Lu A16 版(45312B)"; exit 1; }
