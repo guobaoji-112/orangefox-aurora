@@ -321,10 +321,29 @@ jobs:
           grep -q 'start se_omapi' "$SEOMAPI_RC" || { echo "!! se_omapi rc 未定义 start 动作"; exit 1; }
           grep -q 'android.se.omapi.ISecureElementService/default' "$SEOMAPI_RC" \
             || { echo "!! se_omapi 缺 AIDL interface 声明, OMAPI 服务端不会被 hwservicemanager 绑定"; exit 1; }
-          # 权限模型对齐 secure_element: 需访问 /dev/nq-nci(eSE 设备节点)
-          grep -qE 'group .*(nfc|drmrpc)' "$SEOMAPI_RC" \
-            || { echo "!! se_omapi 权限组未对齐(须含 nfc 或 drmrpc), 可能被 ueventd 拒绝访问 /dev/nq-nci"; exit 1; }
-          # nq-nci 设备节点规则: 缺则 insmod 后节点权限默认 root:root, se_omapi 无法访问
+          # ===== run#45 修正: 权限组断言原来打在错误的二进制上(run#44 3/3 matrix 全挂step7) =====
+          # 符号级实证(se_omapi 82872B 全文扫描): 'nq-nci' 0 次、'/dev/nfc' 0 次、'group' 0 次。
+          # se_omapi 是纯 AIDL OMAPI 服务端, 只经 binder 向 vendor.secure_element 请求
+          # ISecureElement/eSE1, 自己从不 open 设备节点 -> **不需要** nfc/drmrpc 补充组。
+          # 真正 open /dev/nq-nci 的是 vendor.secure_element 链:
+          #   nxp-nci.ko(建节点) -> libEseUtils.so(全树唯一非驱动引用者)
+          #   -> android.hardware.secure_element-service.qti
+          # 权限组断言必须落在真正的节点属主 vendor rc 上(它本来已是 group nfc root)。
+          SE_RC="$DT/recovery/root/vendor/etc/init/android.hardware.secure_element-service.qti.rc"
+          [ -f "$SE_RC" ] \
+            || { echo "!! 缺 vendor.secure_element rc (eSE 节点属主, se_omapi 的服务端对端)"; exit 1; }
+          grep -qE '^[[:space:]]*group[[:space:]].*\bnfc\b' "$SE_RC" \
+            || { echo "!! vendor.secure_element 未加入 nfc 组 -> 无法 open /dev/nq-nci, OMAPI 链必断"; exit 1; }
+          grep -q 'android.hardware.secure_element-service.qti' "$SE_RC" \
+            || { echo "!! vendor.secure_element rc 与实际二进制名不匹配(服务定义与落位件脱节)"; exit 1; }
+          # 反向不变式: se_omapi 是 root binder 客户端。若被降权(丢掉 user/group root),
+          # 会因权限不足拿不到 secure_element HAL -> 重演 weaver 取密钥失败, 必须锁死。
+          grep -qE '^[[:space:]]*user[[:space:]]+root' "$SEOMAPI_RC" \
+            || { echo "!! se_omapi 须以 user root 运行(root binder 客户端, 降权拿不到 ISecureElement HAL)"; exit 1; }
+          grep -qE '^[[:space:]]*group[[:space:]].*\broot\b' "$SEOMAPI_RC" \
+            || { echo "!! se_omapi 须保留 group root(同上游, 降权即拿不到 HAL)"; exit 1; }
+          # nq-nci 节点规则: 属主是 vendor.secure_element(root 身份), 缺规则不阻断构建,
+          # 但保留告警 —— 若实机 se_omapi 起来了仍取不到 eSE, 优先查此处。
           grep -q 'nq-nci' "$DT/recovery/root/vendor/odm/etc/ueventd.rc" \
             || echo ">>> WARN: ueventd.rc 无 nq-nci 规则(eSE 节点权限可能不足, 实机若仍失败优先查此处)"
 
@@ -771,8 +790,11 @@ jobs:
           [ -f /tmp/fox_build.log ] && tail -n 400 /tmp/fox_build.log > "$GITHUB_WORKSPACE/diag/mka_tail400.log"
           { echo "== df =="; df -h; echo "== free =="; free -h; } > "$GITHUB_WORKSPACE/diag/env.txt" 2>&1
           # 关键报错行单独摘出 (-A 4: 连带 FAILED 下面的完整编译命令行, #20 靠它才能定位 -D 宏)
-          grep -inE -A 4 "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 120 \
-            > "$GITHUB_WORKSPACE/diag/errors.txt" || true
+          { grep -inE -A 4 "error:|ninja: build stopped|FAILED:" /tmp/step8.log 2>/dev/null | tail -n 120
+            # run#45: step7 的断言失败也必须落进 errors.txt。此前只grep step8.log,
+            # 导致 step7 挂掉时 errors.txt 恒为空壳(#25/#26/run#43/run#44 四轮盲区)。
+            grep -inE -B 2 -A 6 '^!! ' /tmp/step7.log 2>/dev/null | tail -n 120
+          } > "$GITHUB_WORKSPACE/diag/errors.txt" || true
           ls -la "$GITHUB_WORKSPACE/diag"
           # 同步写入 Step Summary(check-run summary 可匿名经 API 读取)
           { echo "## step7 尾部 120 行"; echo '```'; tail -n 120 /tmp/step7.log 2>/dev/null; echo '```'; \
