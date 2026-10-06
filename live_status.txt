@@ -63,3 +63,9 @@ Swap:          32767         287       32480
 Mem:           15988        4982        2505          20        8500       10390
 Swap:          32767         284       32483
 [ 36% 10483/28548] //external/libchrome:libchrome clang++ base/base_paths_posix.cc (priority: 19)
+== t=12 10-06 13:52:13 ==
+/dev/root       146G  127G   19G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5011        2231          20        8746       10362
+Swap:          32767         283       32484
+[ 39% 11353/28548]  (priority: 18)
