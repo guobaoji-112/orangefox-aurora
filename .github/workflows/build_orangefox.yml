@@ -774,6 +774,39 @@ jobs:
           python3 /tmp/symck2.py "$RD" || { echo "!! se_omapi 符号闭包校验失败(见上), 镜像将无法链接加载"; exit 1; }
 
 
+      - name: 修复 ramdisk 执行位 (依据 run#45 产物实证)
+        run: |
+          # 理由: run#45 产物 cpio 实测有 4 个 AArch64 ELF 可执行程序 mode=0100644(无执行位),
+          #   sbin/bash / sbin/magiskboot / sbin/zip / FFiles/ps
+          # 它们不是 .so/.ko(共享库与内核模块, 不需要执行位),
+          # 也不是 firmware_mnt 固件分区数据(按设计就是 0644) —— 剔除后的差集才是真缺陷。
+          # 脚本自带三类证据输出: 已修复 / 已确认不改 / 失败项;
+          # 任一失败项即 exit 1, 不放宽阈值、不改预期值。
+          #
+          # 显式不改的两项(脚本内部会断言未被改动, 防后人“顺手对齐”):
+          #   product / system_ext —— OF 空目录与 TWRP 的死链符号链接语义等价,
+          #     且 /system/product、/system/system_ext 在两个镜像里都不存在,
+          #     file_contexts 用 /(product|system/product)(/.*)? 二选一匹配。
+          set -o pipefail
+          # GitHub Actions 的每个 step 是独立 shell, 上一步(step6)的 RD 不会继承过来,
+          # 必须在此重新定位 —— 否则 $RD 为空, 脚本会直接 exit 1。
+          # 判据与 symck2 一致: 目录存在且含 se_omapi, 才认作编译产物 rootdir。
+          RD=""
+          for cand in "$HOME/fox_14.1/out/target/product/sm8650/recovery/root"\
+                      "$HOME/fox_14.1/out/target/product/sm8650/rootdir"\
+                      "$HOME/fox_14.1/out/target/product/sm8650/system"; do
+            [ -d "$cand" ] || continue
+            [ -e "$cand/bin/se_omapi" ] || [ -e "$cand/system/bin/se_omapi" ] || continue
+            RD="$cand"; break
+          done
+          [ -n "$RD" ] || { echo "!! 未找到编译产物 rootdir(含 se_omapi), 无法修复执行位"; exit 1; }
+          echo ">>> 权限修复基准(编译产物): $RD"
+          python3 "$GITHUB_WORKSPACE/scripts/fix_perm46.py" "$RD" 2>&1 | tee /tmp/fixperm46.log
+          # 内嵌 ELF 解析依赖同目录的 elfparse.py, 确保它已随仓库推送
+          ls -l "$GITHUB_WORKSPACE/scripts/elfparse.py" "$GITHUB_WORKSPACE/scripts/fix_perm46.py"
+          cp -f /tmp/fixperm46.log "$GITHUB_WORKSPACE/diag/fixperm46.log" 2>/dev/null || true
+
+
       - name: 收集错误诊断
         if: failure()
         run: |
