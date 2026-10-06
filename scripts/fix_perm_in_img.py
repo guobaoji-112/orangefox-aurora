@@ -171,7 +171,11 @@ def lz4_decompress(data):
             try:
                 import lz4.block
             except ImportError:
-                raise Fail("缺少 python-lz4 (pip install lz4)")
+                raise Fail(
+                    "缺少 python-lz4。CI 上装法: apt-get install -y python3-lz4 "
+                    "(或 python3 -m pip install lz4)。"
+                    "注意: liblz4-tool 只提供 lz4 命令行, 不含 Python 绑定 —— "
+                    "装了它本脚本仍会失败(run#49 的失败根因)。")
             out += lz4.block.decompress(blk, uncompressed_size=1 << 30)
         sizes.append(size)
     if not sizes:
@@ -208,7 +212,12 @@ def lz4_compress_like(data, nblocks, max_total=None):
     try:
         import lz4.block
     except ImportError:
-        raise Fail("缺少 python-lz4 (pip install lz4)")
+        raise Fail(
+            "缺少 python-lz4。CI 上装法: apt-get install -y python3-lz4 "
+            "(或 python3 -m pip install lz4)。\n"
+            "    注意: liblz4-tool 只提供 lz4 命令行, 不含 Python 绑定 —— "
+            "装了它本脚本仍会失败。\n"
+            "    这正是 run#49 的失败根因: step2 装了 liblz4-tool 就以为 lz4 就绪。")
 
     def compress_with(nb):
         chunk = (len(data) + nb - 1) // nb

@@ -166,7 +166,8 @@ def decompress_android_lz4(data):
             try:
                 import lz4.block
             except ImportError:
-                raise Fail("缺少 python-lz4 依赖(pip install lz4), 不做静默降级")
+                raise Fail("缺少 python-lz4(pip install lz4 / apt install python3-lz4), "
+                           "不做静默降级。liblz4-tool 不含Python 绑定。")
             try:
                 out += lz4.block.decompress(blk, uncompressed_size=1 << 30)
             except Exception as ex:
