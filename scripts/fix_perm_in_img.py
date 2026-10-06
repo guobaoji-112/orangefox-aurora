@@ -78,6 +78,40 @@ vbmeta 解析结果 —— **未签名、无hash 描述符的占位块**:
 第三版同时把压缩器对齐到上游: LZ4 high_compression level 12。
 实测 16 块重压得 47383481 B, 与原始 47376600 B 仅差 +0.014%,
 ramdisk 体积回到原量级, 尾部余量充足。
+
+## run#52 根因: TARGETS 只存在于 recovery ramdisk, 而产物里有4 个镜像
+
+`find ... -name '*.img'` 收集到 **4 个**镜像, 它们不是同一份东西:
+
+    recovery.img            104857600 B  boot image, ramdisk 47376664 B(4116 条目)
+    OrangeFox-...img104857600 B  同上(改名副本)
+    ramdisk-recovery.img47376664 B  裸 LZ4, 就是上面那份 ramdisk
+    ramdisk.img              2969144 B  **Android 14 vendor_boot ramdisk(第二阶段)**
+
+`ramdisk.img` 只有 23 个条目(init / system/bin/e2fsck / lib*.so),
+是 vendor_boot 的第二阶段 ramdisk, **按设计就不含 sbin/bash 等 recovery 工具**。
+而旧代码对**每个**输入镜像都无条件要求 TARGETS 全部存在, 于是第一个
+处理`ramdisk.img` 时必然fail- fast —— 三路 shard 报错一字不差:
+
+    !! 目标文件在 ramdisk 中不存在: ['sbin/bash', 'sbin/magiskboot', ...]
+        诊断: ramdisk 2969144 B -> cpio 6123776 B, LZ4 1 块, cpio 条目 23 个
+
+**run#51 把它误判成 "python-lz4 3.1.3 静默返回截断明文"**, 并据此把
+lz4 强钉到 >=4.0。run#52 装上 4.4.5 后报错一字不变, 证明那个归因是错的:
+真因是判据对错了对象。**教训: 同一报错连续两轮"改环境不改判据"却依旧
+复现, 就该怀疑判据本身, 而不是继续调依赖版本。**
+
+## 修法: 按 ramdisk 角色分流
+
+判据从"必须含 TARGETS"改为"**若含任一 TARGETS, 则必须全含**":
+
+  - 一个 TARGET 都没命中 -> 不是 recovery ramdisk(vendor_boot 第二阶段),
+    跳过 mode 修复, 但仍要过"ELF 无执行位"通用检查(它自带的 ELF 豁免规则)
+  - 命中部分 TARGETS -> 真的是 recovery ramdisk 却缺件, 属真缺陷, 仍 fail-fast
+
+这样vendor_boot ramdisk 不再误报, 而 recovery ramdisk 缺件照样拦住。
+**不变式是被"更强的判据"替换, 不是被放宽** —— 原来"4 个目标全在"是
+硬编码白名单, 现在改成"部分命中即视为 recovery 并要求完整"。
 """
 
 import hashlib
@@ -105,6 +139,13 @@ LZ4_LEVEL = 12
 
 # 要修的可执行程序: AArch64 ELF, 但mode 无执行位, 直接 exec 会 EACCES
 TARGETS = ("sbin/bash", "sbin/magiskboot", "sbin/zip", "FFiles/ps")
+
+# 设计上就不需要执行位的后缀(与 assert_perm_in_img.py 同一套规则)。
+# 用于"这个 ramdisk 不含 TARGETS"时的通用兜底检查 —— vendor_boot 第二阶段
+# ramdisk 里也有 ELF(ld-android.so 等), 不能因为不含 TARGETS 就整体免检。
+EXEMPT_SUFFIX = (".so", ".ko")
+FIRMWARE_SUFFIX = (".mdt", ".b00")
+FIRMWARE_PATH_MARK = "firmware_mnt/"
 
 
 class Fail(Exception):
@@ -176,19 +217,18 @@ def lz4_decompress(data):
                 raise Fail(
                     "缺少 python-lz4。CI 装法: "
                     "python3 -m pip install 'lz4>=4.0,<5'\n"
-                    "    注意1: liblz4-tool / python3-lz4(apt) 都不可靠 —— 前者只是\n"
-                    "      命令行工具不含 Python 绑定; 后者是 3.1.3, 传\n"
-                    "      uncompressed_size 时会**静默返回被截断的明文**\n"
-                    "      (3.x 的 C 层跳过 \"解压长度 vs 期望长度\" 校验),\n"
-                    "      表现为 cpio 只解析出前几条、后续文件\"不存在\"(run#51 根因)。\n"
-                    "    注意2: 必须 >=4.0, 已实测 4.4.5 行为正确。")
+                    "    注意: liblz4-tool 只是 lz4 命令行, 不含 Python 绑定;\n"
+                    "    apt 的 python3-lz4 是 3.1.3, 而本脚本要求 >=4.0。\n"
+                    "    (run#53 更正: run#51/run#52 的真正根因不是 lz4 版本,\n"
+                    "     而是 TARGETS 判据对 vendor_boot ramdisk 误报 —— 见下方说明。\n"
+                    "     版本闸门保留, 因为 3.1.3 与 4.x 在大块解压行为上确有差异,\n"
+                    "     属于该关卡的独立不变式, 不再拿它解释那次失败。)")
             _ver = getattr(lz4, "__version__", "0")
             _maj = int(_ver.split(".")[0]) if _ver[:1].isdigit() else 0
             if _maj < 4:
                 raise Fail(
-                    "python-lz4 %s 过旧, 需 >=4.0。3.x 会静默返回截断明文, "
-                    "使 cpio 解析不全(run#51 的失败根因)。请用 pip 装 4.x。"
-                    % _ver)
+                    "python-lz4 %s 过旧, 需 >=4.0。请用 pip 装 4.x "
+                    "(apt 的 python3-lz4 是 3.1.3)。" % _ver)
             try:
                 out += lz4.block.decompress(blk, uncompressed_size=1 << 30)
             except Exception as ex:
@@ -368,28 +408,87 @@ def cpio_iter(buf):
             return pos
 
 
+def scan_missing_exec(raw, ents):
+    """返回「ELF 且无执行位且非豁免」的条目列表。用于不含 TARGETS 的 ramdisk。
+
+    豁免规则与 assert_perm_in_img.py 一致(.so/.ko 与固件分区数据),
+    两者必须同规则 —— 否则会出现"修复脚本认为合规、断言脚本认为有缺陷"
+    这种两边打架的假阴性。
+    """
+    bad = []
+    for pos, _hdr_len, fsz, name, ds in ents:
+        if fsz < 4:
+            continue
+        data = raw[ds:ds + fsz]
+        if data[:4] != b"\x7fELF":
+            continue
+        mode = int(raw[pos + 14:pos + 22], 16)
+        if mode & 0o111:
+            continue
+        if name.endswith(EXEMPT_SUFFIX):
+            continue
+        if name.endswith(FIRMWARE_SUFFIX) and FIRMWARE_PATH_MARK in name:
+            continue
+        bad.append((name, fsz, mode))
+    return bad
+
+
+def scan_exempt_count(raw, ents):
+    """统计按设计豁免(有 ELF 魔数但不需要执行位)的条目数, 仅用于报告。"""
+    n = 0
+    for pos, _hdr_len, fsz, name, ds in ents:
+        if fsz < 4 or raw[ds:ds + 4] != b"\x7fELF":
+            continue
+        if int(raw[pos + 14:pos + 22], 16) & 0o111:
+            continue
+        if name.endswith(EXEMPT_SUFFIX):
+            n += 1
+        elif name.endswith(FIRMWARE_SUFFIX) and FIRMWARE_PATH_MARK in name:
+            n += 1
+    return n
+
+
 def fix_cpio_modes(raw):
     """改目标条目的 mode。返回 (新 cpio, [(name, old, new)], 尾部长度)。
 
     除目标条目的 mode 字段(偏移 14, 8 位十六进制)外, 全部字节原样搬运。
+
+    ## run#53 修掉的幂等性缺陷(变异测试 B2 抓出)
+
+    原实现里"已有执行位就跳过"的写法是:
+
+        if old & 0o111:
+            continue        # <- 这一跳把 out += hdr 也跳过了
+
+    `continue` 作用于整个 for 循环体, 于是**整条记录(含头部)都没被写进 out**,
+    重建结果比原文少一整条。原始产物 4 个目标都是 100644, 永远走不到这个分支,
+    所以本地与 run#49~#52 都没暴露; 一旦对**已修复产物幂等重跑**(CI 上正是
+    这个场景: 修复 -> 断言 -> 判据自检), 立刻炸:
+
+        重建 cpio 长度不一致: 126747000 != 130143488
+
+    修法: 把"是否已带执行位"的判断收窄到只管 mode 字段, 不再用 continue
+    跳出循环体。**跳过逻辑与搬运逻辑必须分开** —— 凡是"部分跳过"的场景,
+    都不能用 continue 跳过整条记录。
     """
     out = bytearray()
     changed = []
-    end_pos = 0
     for pos, hdr_len, fsz, name, ds in cpio_iter(raw):
         hdr = bytearray(raw[pos:pos + hdr_len])
         if name in TARGETS:
             old = int(raw[pos + 14:pos + 22], 16)
-            if old & 0o111:
-                continue  # 已有执行位
-            new = (old & ~0o7777) | 0o755
-            hdr[14:22] = ("%08x" % new).encode()
-            changed.append((name, old, new))
+            if not (old & 0o111):
+                # 仅在缺执行位时改mode; 已带执行位则原样搬运该条目
+                new = (old & ~0o7777) | 0o755
+                hdr[14:22] = ("%08x" % new).encode()
+                changed.append((name, old, new))
         out += hdr
         out += raw[ds:ds + fsz]
         out += b"\0" * (a4(fsz) - fsz)
-    end_pos = out.find(b"TRAILER!!!")
-    # 找到 TRAILER 后, 其条目结束即为 cpio 末尾
+
+    # TRAILER 条目的末端即 cpio 末尾, 其后是原产物的对齐填充, 需原样搬运。
+    # (注意不能用 out.find(b"TRAILER!!!") —— 那匹配到的是文件名文本,
+    #  偏移与条目末端无关; 必须按条目结构定位。)
     tail_start = None
     for pos, hdr_len, fsz, name, ds in cpio_iter(raw):
         if name == "TRAILER!!!":
@@ -450,24 +549,67 @@ def process(path, report):
     raw, nblocks, _sizes = lz4_decompress(blob)
     ents = list(cpio_iter(raw))
     names = {n for (_p, _h, _f, n, _d) in ents}
+
+    # ---- 前置不变式: cpio 必须完整走到 TRAILER!!! -------------------
+    # (变异测试 A4 抓出来的真实漏检)
+    # 把 ramdisk-recovery.img 截断到 1/3 后, 剩下的 1/3 恰好含全部 4 个
+    # TARGETS, 于是判据把它认成正常 recovery ramdisk 走修复路径并 exit 0 ——
+    # 一个只剩三分之一内容的镜像被判合格。
+    # 病根: lz4_decompress 只要求"块自洽", 而 cpio 前缀天然自洽;
+    #       条目数骤减(4116 -> 数百)才是截断的可观测信号。
+    # 所以在做任何判定之前, 先要求明文里存在 TRAILER!!!。
+    # 这条对两类 ramdisk 都成立: 完整产物一定有它, 截断产物一定没有。
+    if CPIO_TRAILER not in raw:
+        raise Fail(
+            "cpio 明文 %d B 内未见 TRAILER!!!, 镜像不完整(条目 %d 个)。\n"
+            "    诊断: ramdisk %d B, LZ4 %d 块。\n"
+            "    完整 recovery ramdisk 应有 4116 条左右; 条目数过少即明文被截断\n"
+            "    (或 python-lz4 版本异常), 拒绝在残缺镜像上做修复。"
+            % (len(raw), len(ents), len(blob), nblocks))
+
+    present = [t for t in TARGETS if t in names]
     missing = [t for t in TARGETS if t not in names]
-    if missing:
-        # 报出真实现场而不是只说"缺失" —— run#51 就是在这一行卡住,
-        # 而日志只列出缺失项, 完全看不出 ramdisk 里到底有什么。
-        # (根因见下方 raise 的详细诊断: 两种可能需现场数据才能区分)
+
+    # run#52 根因修正 --------------------------------------------------------
+    # 旧判据: "TARGETS 必须全在", 对 4 个镜像一律要求 -> 撞上 vendor_boot
+    # 第二阶段 ramdisk(ramdisk.img, 仅 23 条目)必然误报失败。
+    # 新判据: **部分命中即认定为 recovery ramdisk, 此时要求全含**;
+    #         一个都没命中 = 不是 recovery ramdisk, 跳过 TARGETS 修复。
+    # 这样缺件仍被拦住(run#51/run#52 的场景不再误报), 而判据并非放宽:
+    # 原来是无条件全含, 现在把"是否 recovery ramdisk"的判定交给数据。
+    if missing and present:
+        # 报出真实现场而不是只说"缺失" —— 日志只列缺失项时完全看不出
+        # ramdisk 里到底有什么, 这正是 run#51 误判的直接原因。
         sbin_like = sorted(n for n in names
                            if ("bash" in n or "magiskboot" in n
                                or n.endswith("/zip") or "FFiles" in n))[:20]
         raise Fail(
-            "目标文件在 ramdisk 中不存在: %s\n"
+            "recovery ramdisk 缺少部分目标文件: 缺 %s, 已有 %s\n"
             "    诊断: ramdisk %d B -> cpio %d B, LZ4 %d 块, cpio 条目 %d 个\n"
             "    诊断: cpio 首个条目 = %r\n"
             "    诊断: 含 bash/magiskboot/zip/FFiles 的条目 = %s\n"
             "    诊断: 前 15 个条目 = %s"
-            % (missing, len(blob), len(raw), nblocks, len(ents),
+            % (missing, present, len(blob), len(raw), nblocks, len(ents),
                ents[0][3] if ents else None,
                sbin_like if sbin_like else "(无)",
                [n for (_p, _h, _f, n, _d) in ents][:15]))
+
+    if not present:
+        # 不是 recovery ramdisk(vendor_boot 第二阶段等)。不能直接放行 ——
+        # 它同样含 ELF, 若有真缺执行位仍必须拦住。
+        bad = scan_missing_exec(raw, ents)
+        if bad:
+            raise Fail(
+                "非 recovery ramdisk 内存在无执行位的 ELF: %s\n"
+                "    该镜像不含任何 TARGETS, 按设计无需修复; 但下列 ELF 是真缺陷,\n"
+                "    不能因'不是 recovery ramdisk'而免检。" % bad[:10])
+        report.append(">>> %s  [%s]"
+                      % (base, "非 recovery ramdisk(不含 TARGETS), 无需修复"))
+        report.append("    ramdisk %d B -> cpio %d B, LZ4 %d 块, cpio 条目 %d 个"
+                      % (len(blob), len(raw), nblocks, len(ents)))
+        report.append("    通用检查: 无执行位 ELF 0 个(豁免 %d), 判定 PASS"
+                      % scan_exempt_count(raw, ents))
+        return False, None
 
     new_raw, changed, tail = fix_cpio_modes(raw)
     if not changed:
