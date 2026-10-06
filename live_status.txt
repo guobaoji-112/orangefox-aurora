@@ -81,3 +81,9 @@ Swap:          32767         282       32485
 Mem:           15988        5078        1634          20        9276       10295
 Swap:          32767         280       32487
 [ 48% 13734/28548] //prebuilts/rust:libprofiler_builtins.rust_sysroot rustc linux-x86/1.75.0/src/stdlibs/library/profiler_builtins/src/lib.rs (priority: 16)
+== t=15 10-06 14:01:17 ==
+/dev/root       146G  128G   18G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5950         531          20        9506        9422
+Swap:          32767         280       32487
+[ 51% 14825/28548] //external/protobuf:libprotobuf-cpp-full clang++ src/google/protobuf/any.cc [arm] (priority: 15)
