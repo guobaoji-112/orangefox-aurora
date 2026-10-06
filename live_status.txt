@@ -45,3 +45,9 @@ Swap:          32767         292       32475
 Mem:           15988        5350        2662          19        7975       10024
 Swap:          32767         290       32477
 [ 21% 6138/28548] //system/keymaster:libkeymaster_portable clang++ km_openssl/attestation_utils.cpp [arm] (priority: 27)
+== t=9 10-06 13:43:09 ==
+/dev/root       146G  127G   19G  87% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        4972        2724          19        8291       10402
+Swap:          32767         288       32479
+[ 27% 7777/28548] //external/selinux/checkpolicy:checkpolicy clang parse_util.c [linux_glibc] (priority: 23)
