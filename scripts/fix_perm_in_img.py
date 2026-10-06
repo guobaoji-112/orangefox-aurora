@@ -419,8 +419,15 @@ def process(path, report):
     # budget = "新 ramdisk 允许占多少字节"(到 vbmeta 偏移为止)。
     # 拿到预算后再压, 避免压完才发现装不下再重来。
     footer = read_avb_footer(path) if kind == "boot" else None
-    orig_filesize = os.path.getsize(path) if kind == "boot" else 0
-    if kind == "boot" and footer is not None:
+    orig_filesize = os.path.getsize(path)
+    if kind == "ramdisk":
+        # 裸 ramdisk 是中间产物, 不写任何分区, 没有容量上限。
+        # 但仍以"不超原长"为预算 —— 否则重压后可能比原产物更大, 平白浪费
+        # 磁盘与上传流量, 且让产物与boot.img 里的那份失去可比性。
+        # (不能用 orig_filesize=0 代入会算出 -4096 的负预算, 把自适应
+        #  退化到1 块; 这属于语义错误, 只是恰好 1 块压得更小才没炸。)
+        budget = orig_filesize
+    elif footer is not None:
         budget = footer["original_image_size"] - 0x1000
     else:
         budget = orig_filesize - 0x1000
@@ -515,12 +522,12 @@ def process(path, report):
         kindlabel = "boot.img(kernelless=%s, AVB footer=%s)" % (
             ksz == 0, "有" if footer else "无")
     else:
-        # 裸 ramdisk: 无 header, 无尾部 padding
+        # 裸 ramdisk: 无 header, 无尾部 padding, 不写任何分区
         out_head = b""
         footer_new = b""
         tail_new = b""
         new_total = len(new_blob)
-        kindlabel = "裸 ramdisk"
+        kindlabel = "裸 ramdisk(中间产物, 不受分区容量约束)"
 
     report.append(">>> %s  [%s]" % (base, kindlabel))
     report.append("    ramdisk %d B -> %d B  (cpio %d B 恒定, 尾部填充 %d B)"
@@ -529,9 +536,10 @@ def process(path, report):
         report.append("    %-18s %o -> %o" % (name, old, newm))
     report.append("    重压缩 %s/%d: 原%d 块 -> 实用 %d 块(预算 %d B)"
                   % (LZ4_MODE, LZ4_LEVEL, nblocks, nblocks_used, budget))
-    report.append("    文件总长 %d B (容量上限 %d B, 余量 %+d B)"
-                  % (new_total, RECOVERY_PARTITION_MAX,
-                     RECOVERY_PARTITION_MAX - new_total))
+    if kind == "boot":
+        report.append("    文件总长 %d B (容量上限 %d B, 余量 %+d B)"
+                      % (new_total, RECOVERY_PARTITION_MAX,
+                         RECOVERY_PARTITION_MAX - new_total))
     return True, (kind, out_head, new_blob, tail_new, footer_new,
                   rsz, changed, new_total)
 
