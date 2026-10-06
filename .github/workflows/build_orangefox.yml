@@ -832,6 +832,36 @@ jobs:
           ls -la "$GITHUB_WORKSPACE/output"
 
 
+      - name: "安装产物级后处理依赖 (run#50: 修 run#49 的缺依赖失败)"
+        run: |
+          # run#49 失败根因: 产物级修复需要 python-lz4(LZ4 legacy 解压 + HC12 重压),
+          #   但 step2 只装了 liblz4-tool(那是 lz4 命令行, 不含 Python 绑定),
+          #   python3-lz4 也没装 -> 脚本 fail-fast 报"缺少 python-lz4", exit 1。
+          #
+          #   本地环境恰好装了 lz4, 所以本地端到端全绿而 CI 全红 ——
+          #   **本地通过不能替代依赖显式声明**。
+          #
+          # 独立成一步而非并入产物修复: 缺依赖时能一眼看出是"环境问题"而非
+          #   "产物问题", 且失败发生在上传产物之前, 不会留下一堆无意义产物。
+          set -e
+          for i in 1 2 3; do
+            sudo apt-get install -y python3-lz4 && break || (echo "apt python3-lz4 重试 $i"; sleep 10)
+          done
+          # apt装成功时 import lz4.block 可用; 装不上(如包源缺失)退回 pip
+          if ! python3 -c "import lz4.block" 2>/dev/null; then
+            echo ">>> apt 的 python3-lz4 不可用, 改走 pip"
+            python3 -m pip install --upgrade lz4
+          fi
+          # fail-fast: 依赖仍不可用就立即退出, 不浪费编译时间
+          python3 - <<'PY'
+          import lz4.block, sys
+          probe = b"orangefox-lz4-self-test" * 64
+          c = lz4.block.compress(probe, store_size=False,
+                                  mode="high_compression", compression=12)
+          assert lz4.block.decompress(c, uncompressed_size=len(probe)) == probe, "往返不一致"
+          print(">>> python-lz4 就绪: HC12 往返自检通过 (%d -> %d B)" % (len(probe), len(c)))
+          PY
+
       - name: "产物级执行位修复 (run#49: 修超分区容量 + 补容器断言)"
         run: |
           # run#47 教训: 旧 step7 对 "$RD"(mka 产出的中间目录) 做 chmod,
