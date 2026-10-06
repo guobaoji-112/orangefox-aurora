@@ -21,3 +21,9 @@ Swap:          32767       15408       17359
 Mem:           15988        5532        4227          12        6228        9848
 Swap:          32767         310       32457
 [  4% 1410/28548] //external/protobuf:libprotoc clang++ src/google/protobuf/arenaz_sampler.cc [linux_glibc] (priority: 54)
+== t=5 10-06 13:31:04 ==
+/dev/root       146G  125G   21G  87% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5756        3610          17        6621        9620
+Swap:          32767         301       32466
+[  5% 1672/28548] //system/tools/aidl:libaidl-common clang++ aidl_to_ndk.cpp [linux_glibc] (priority: 50)
