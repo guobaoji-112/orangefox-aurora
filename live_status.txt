@@ -99,3 +99,9 @@ Swap:          32767         279       32488
 Mem:           15988        5074        1108          20        9805       10298
 Swap:          32767         279       32488
 [ 60% 17261/28548] //external/libchrome:libchrome clang++ base/metrics/persistent_sample_map.cc (priority: 13)
+== t=18 10-06 14:10:20 ==
+/dev/root       146G  129G   17G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5127         781          20       10079       10245
+Swap:          32767         279       32488
+[ 65% 18786/28548] //system/core/libsuspend:libsuspend clang autosuspend.c (priority: 13)
