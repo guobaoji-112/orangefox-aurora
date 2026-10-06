@@ -33,3 +33,9 @@ Swap:          32767         301       32466
 Mem:           15988        5250        3470          18        7267       10124
 Swap:          32767         296       32471
 [ 10% 2943/28548] //system/libhidl:libhidlbase clang++ base/HidlSupport.cpp (priority: 40)
+== t=7 10-06 13:37:07 ==
+/dev/root       146G  126G   20G  87% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5483        2887          19        7617        9891
+Swap:          32767         292       32475
+[ 13% 3965/28548] //system/libhwbinder:libhwbinder-impl-internal clang++ ProcessState.cpp [arm] (priority: 31)
