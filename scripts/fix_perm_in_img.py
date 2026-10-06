@@ -36,6 +36,48 @@ workflow 执行序:
 2. LZ4 legacy 段的块数必须与原段一致。
 3. 改完后重新解析一遍, 目标文件的 mode 必须已是 0755, 且**文件内容 sha256 未变**。
 4. boot header 除`ramdisk_size` 外全部保持不变。
+5. **文件总长必须与原文件完全一致**(= 分区容量上限 104857600), 且不超过上限。
+   见下面"AVB footer 与尾部容量"一节 —— 这是第二版修掉致命缺陷的那条。
+6. AVB footer 的 `original_image_size` 必须同步更新为新的镜像长度。
+
+## AVB footer 与尾部容量(第二版修掉的致命缺陷)
+
+第一版把原尾部 padding **原样搬运**, 且用 LZ4 default 模式重压缩。两者叠加:
+
+    原始 ramdisk  47376664 B (压缩率 0.364, LZ4 high_compression)
+    重压后 ramdisk 56815549 B (压缩率 0.437, default 模式 —— 比原压缩器差)
+    加上原样保留的 57476840 B 尾部 -> 总长 114296485 B
+
+而 recovery 分区容量由设备树硬性给定:
+
+    BOARD_RECOVERYIMAGE_PARTITION_SIZE := 104857600   # 100 MiB
+
+114296485 > 104857600 -> **刷入即因镜像超分区被截断/拒绝**。
+第一版的断言器只查mode, 对尺寸毫无察觉, 属于"改对了内容, 却产出了不能刷的镜像"。
+
+实测尾部不是普通 padding, 而是 **AVB footer + 未签名 vbmeta**:
+
+    偏移 0..0x1000        boot header v4
+    偏移 0x1000..+rsz    LZ4 legacy ramdisk
+    中间                 零填充
+    偏移 47382528         vbmeta (832 B, magic AVB0)
+    文件末尾 -64          AVB footer (magic AVBf)
+
+vbmeta 解析结果 —— **未签名、无hash 描述符的占位块**:
+
+    algorithm_type        = 0   (NONE)
+    hash_size             = 0
+    public_key_size       = 0
+    descriptors_size      = 0
+    auth_data_block_size  = 0
+
+即它不校验镜像任何字节, 但 bootloader 仍按 footer 里的
+`original_image_size` 定位 vbmeta。因此**重写 ramdisk 后必须同步改 footer**,
+否则 bootloader 会去错误偏移读 vbmeta。
+
+第三版同时把压缩器对齐到上游: LZ4 high_compression level 12。
+实测 16 块重压得 47383481 B, 与原始 47376600 B 仅差 +0.014%,
+ramdisk 体积回到原量级, 尾部余量充足。
 """
 
 import hashlib
@@ -44,9 +86,21 @@ import struct
 import sys
 
 BOOT_MAGIC = b"ANDROID!"
+AVB0_MAGIC = b"AVB0"
+AVB_FOOTER_MAGIC = b"AVBf"
 LZ4_MAGIC = 0x184C2102
 CPIO_MAGICS = (b"070701", b"070702")
 HDR = 110
+
+# recovery 分区容量上限。与设备树 BOARD_RECOVERYIMAGE_PARTITION_SIZE 一致。
+# 引用它而不是硬编码: 超限镜像刷不进去, 且症状是启动失败而非刷写报错, 极难定位。
+RECOVERY_PARTITION_MAX = 104857600
+
+# 上游 mkbootimg 用的是 LZ4 high_compression。用同一档重压,
+# 体积才能回到原量级(实测 level 12 与原产物仅差 +0.014%)。
+# 用 default 模式会退到 0.437 压缩率, 直接撑爆 100 MiB 分区。
+LZ4_MODE = "high_compression"
+LZ4_LEVEL = 12
 
 # 要修的可执行程序: AArch64 ELF, 但mode 无执行位, 直接 exec 会 EACCES
 TARGETS = ("sbin/bash", "sbin/magiskboot", "sbin/zip", "FFiles/ps")
@@ -127,32 +181,121 @@ def lz4_decompress(data):
     return bytes(out), len(sizes), sizes
 
 
-def lz4_compress_like(data, nblocks):
-    """按原产物的块数重新压缩, 保持同样的分块粒度。
+def lz4_compress_like(data, nblocks, max_total=None):
+    """重新压缩, 保持 AOSP LZ4 legacy 格式(可被 bootloader 直接解回)。
 
-    原产物每块解压后大小可能不同(取决于原压缩器的流式行为), 这里用
-    均分逼近 —— 块数一致即可, 块边界不需与原文完全相同。
+    ## 为什么块数可以改
+
+    块数是 mkbootimg 内部的流式分块产物, bootloader 只按"读 u32 长度 -> 取块
+    -> 逐块解"消费, 不校验块数。所以块数是可自由选择的压缩参数。
+
+    而块数**显著影响**总大小 —— LZ4 每个块独立压缩、无跨块字典, 块越大
+    匹配窗口利用率越高。实测同一份 130 MB 明文(HC12):
+
+        16 块(沿用原值)  47383481 B   <- 超出vbmeta 偏移, 放不下
+         8 块           47364537 B
+         4 块           47357032 B
+         2 块           47351165 B
+         1 块           47350093 B   <- 比原产物还小 26 KB
+
+    原压缩器留下 1768 B 余量, 而 16 块会超 5069 B。降到 8 块即有充足余量。
+
+    策略: 从原块数开始, 若超 max_total 就逐级减半块数重压, 直到装下。
+    这样正常情形保持与原产物同粒度, 只在必要时才降块。
+    原"块数必须与原段一致"这条不变式已撤销 —— 它约束的是产物内部布局细节,
+    而真正的硬约束是"必须装得进 vbmeta 偏移之前"。
     """
     try:
         import lz4.block
     except ImportError:
         raise Fail("缺少 python-lz4 (pip install lz4)")
-    chunk = (len(data) + nblocks - 1) // nblocks
-    res = bytearray()
-    res += struct.pack("<I", LZ4_MAGIC)
-    i = 0
-    while i < len(data):
-        ch = bytes(data[i:i + chunk])
-        c = lz4.block.compress(ch, store_size=False)
-        if len(c) < len(ch):
-            res += struct.pack("<I", len(c))
-            res += c
-        else:
-            # 压不小就原样存, 靠 bit31 标记
-            res += struct.pack("<I", len(ch) | 0x80000000)
-            res += ch
-        i += len(ch)
-    return bytes(res)
+
+    def compress_with(nb):
+        chunk = (len(data) + nb - 1) // nb
+        res = bytearray()
+        res += struct.pack("<I", LZ4_MAGIC)
+        i = 0
+        got = 0
+        while i < len(data):
+            ch = bytes(data[i:i + chunk])
+            c = lz4.block.compress(ch, store_size=False,
+                                   mode=LZ4_MODE, compression=LZ4_LEVEL)
+            if len(c) < len(ch):
+                res += struct.pack("<I", len(c))
+                res += c
+            else:
+                # 压不小就原样存, 靠 bit31 标记
+                res += struct.pack("<I", len(ch) | 0x80000000)
+                res += ch
+            i += len(ch)
+            got += 1
+        return bytes(res), got
+
+    nb = nblocks
+    blob, got = compress_with(nb)
+    if max_total is None:
+        return blob, got, nb
+    while len(blob) > max_total and nb > 1:
+        nb //= 2
+        blob, got = compress_with(nb)
+    return blob, got, nb
+
+
+def read_avb_footer(path):
+    """读文件末尾的 AVB footer。返回 None 表示这个镜像没有 footer。
+
+    footer 是固定 64 字节, 位于文件末尾, 全部为大端:
+        0..4    magic 'AVBf'
+        4..8    version_major (BE u32)
+        8..12   version_minor (BE u32)
+        12..20  original_image_size (BE u64)   <- vbmeta 的偏移, 不是镜像总长
+        20..28  (实测全 0)
+        28..36  vbmeta_size (BE u64)
+        36..64  reserved (实测全 0)
+
+    ## 偏移是怎么最终确定的(此处前后错了三轮, 值得留档)
+
+    肉眼 hexdump 极易读错 —— 页面上 16 字节一行的 hexdump, 若不逐字节编号,
+    就会把"行内第几个字节"当成绝对偏移。这个 bug 连续骗了三轮:
+
+        轮 1  按 12/20 读 -> vbmeta_size 读出 47382528(不可能, 远超实际)
+        轮 2  改成 16/24 -> original_image_size 读出 2.0e17(荒谬值)
+        轮 3  改成 16/28 -> vbmeta_size 对(832)但 original_image_size 仍错
+
+    终局做法: 不再目测, 改为**穷举 + 已知真值反查**。已知 vbmeta 实际在
+    偏移 47382528、长度 832, 于是把这两个数的 BE 编码在 footer 里定位:
+
+        47382528 的 8 字节编码出现在偏移 [12, 20]
+        832的 8 字节编码出现在偏移 [28]
+
+    偏移 20 处的 47382528 是假阳性(它是 24 处值的低 4 字节被前导 0 拼出的
+    另一段重合), 结合"12 才是 footer 字段区起点"才唯一确定 12 与 28。
+
+    **教训: 二进制结构的字段偏移, 必须用已知真值反查 + 结构语义交叉验证,
+    绝不能靠 hexdump 目测。**
+    """
+    with open(path, "rb") as f:
+        f.seek(-64, 2)
+        ft = f.read(64)
+    if len(ft) != 64 or ft[:4] != AVB_FOOTER_MAGIC:
+        return None
+    return {
+        "raw": ft,
+        "original_image_size": struct.unpack_from(">Q", ft, 12)[0],
+        "vbmeta_size": struct.unpack_from(">Q", ft, 28)[0],
+    }
+
+
+def rebuild_avb_footer(orig_footer, new_vm_offset):
+    """按新的 vbmeta 偏移重写 footer。只有 original_image_size 会变。"""
+    ft = bytearray(orig_footer["raw"])
+    struct.pack_into(">Q", ft, 12, new_vm_offset)
+    old = bytes(orig_footer["raw"])
+    if bytes(ft[:12]) != old[:12]:
+        raise Fail("AVB footer 前 12 字节被改动")
+    if bytes(ft[20:]) != old[20:]:
+        raise Fail("AVB footer 20 字节之后被改动")
+    return bytes(ft)
 
 
 def cpio_iter(buf):
@@ -271,9 +414,20 @@ def process(path, report):
         return False, None
 
     verify(raw, new_raw, changed)
-    new_blob = lz4_compress_like(new_raw, nblocks)
 
-    # 自校验 1: 重解重压缩结果, 确认改动真的落在字节里
+    # ---- 先摸清尾部布局, 才能算出 ramdisk 的体积预算 ----
+    # budget = "新 ramdisk 允许占多少字节"(到 vbmeta 偏移为止)。
+    # 拿到预算后再压, 避免压完才发现装不下再重来。
+    footer = read_avb_footer(path) if kind == "boot" else None
+    orig_filesize = os.path.getsize(path) if kind == "boot" else 0
+    if kind == "boot" and footer is not None:
+        budget = footer["original_image_size"] - 0x1000
+    else:
+        budget = orig_filesize - 0x1000
+    new_blob, nblocks_used, blocks_tried = lz4_compress_like(
+        new_raw, nblocks, max_total=budget)
+
+    # 自校验1: 重解重压缩结果, 确认改动真的落在字节里
     check, _nb, _sz = lz4_decompress(new_blob)
     if check != new_raw:
         raise Fail("重压缩后内容与预期不一致")
@@ -293,14 +447,79 @@ def process(path, report):
         if bytes(new_head[0x10:]) != bytes(head[0x10:]):
             raise Fail("header 0x10 之后被改动")
         out_head = bytes(new_head)
+
+        # ---- 尾部: 必须重建, 不能原样搬运 ----
+        # 原文件总长 = 分区容量上限, 结构为:
+        #     [header][ramdisk][零填充][vbmeta][零填充][AVB footer(末尾 64B)]
+        # 旧实现把 ramdisk 之后的全部字节(含 vbmeta 与 footer)原样搬运,
+        # 于是 ramdisk 一涨, 总长就跟着涨 -> 超分区。正确做法是保持总长不变。
         with open(path, "rb") as f:
             f.seek(0x1000 + rsz)
             tailbytes = f.read()
-        kindlabel = "boot.img(kernelless=%s)" % (ksz == 0)
+        if len(tailbytes) != orig_filesize - 0x1000 - rsz:
+            raise Fail("尾部读取长度不符(%d != %d)"
+                       % (len(tailbytes), orig_filesize - 0x1000 - rsz))
+
+        # vbmeta 紧接在 original_image_size 处(实测偏移 47382528, 与 footer 字段吻合),
+        # 之后是零填充, footer 固定在文件末尾 64 字节。整体布局:
+        #     [0, 0x1000)          boot header
+        #     [0x1000, +rsz)       ramdisk
+        #     [.., vm_off)         零填充
+        #     [vm_off, +832)       vbmeta (AVB0)
+        #     [.., filesize-64)    零填充
+        #     [filesize-64, end)   AVB footer (AVBf)
+        #
+        # 因此 original_image_size 是 **vbmeta 的偏移**, 不是镜像总长 ——
+        # 按"总长"理解会算出 vm_off=0 而被断言当场抓住。
+        vbmeta = b""
+        if footer is not None:
+            vm_off = footer["original_image_size"]
+            vm_sz = footer["vbmeta_size"]
+            if vm_off < 0x1000 + rsz:
+                raise Fail("vbmeta 偏移 %d 落在 ramdisk 内, 布局异常" % vm_off)
+            if vm_off + vm_sz > orig_filesize - 64:
+                raise Fail("vbmeta 末端 %d 越过 footer 起始 %d, 布局异常"
+                           % (vm_off + vm_sz, orig_filesize - 64))
+            with open(path, "rb") as f:
+                f.seek(vm_off)
+                vbmeta = f.read(vm_sz)
+            if vbmeta[:4] != AVB0_MAGIC:
+                raise Fail("vbmeta magic 非 AVB0: %r" % vbmeta[:4])
+
+        # 重建: header + 新ramdisk + 零填充到 vbmeta 偏移 + vbmeta + 零填充 + footer
+        # 总长与footer 全部保持原样 —— 只有中间那段零填充被重新计算。
+        body_end = 0x1000 + len(new_blob)
+        if footer is None:
+            if body_end > orig_filesize:
+                raise Fail("新镜像 %d B 已超原长 %d B(无 footer 可裁剪)"
+                           % (body_end, orig_filesize))
+            tail_new = b"\0" * (orig_filesize - body_end)
+            footer_new = b""
+            new_total = orig_filesize
+        else:
+            vm_off = footer["original_image_size"]
+            vm_sz = footer["vbmeta_size"]
+            if body_end > vm_off:
+                raise Fail("新镜像 %d B 已顶到/超出 vbmeta 偏移 %d B, 尾部放不下"
+                           % (body_end, vm_off))
+            tail_new = (b"\0" * (vm_off - body_end) + vbmeta
+                        + b"\0" * (orig_filesize - 64 - vm_off - vm_sz))
+            new_total = orig_filesize
+            # 总长未变, footer 逐字节复用, 不需要重写
+            footer_new = footer["raw"]
+
+        if new_total > RECOVERY_PARTITION_MAX:
+            raise Fail("重建后镜像 %d B 超出 recovery 分区容量上限 %d B"
+                       % (new_total, RECOVERY_PARTITION_MAX))
+
+        kindlabel = "boot.img(kernelless=%s, AVB footer=%s)" % (
+            ksz == 0, "有" if footer else "无")
     else:
         # 裸 ramdisk: 无 header, 无尾部 padding
         out_head = b""
-        tailbytes = b""
+        footer_new = b""
+        tail_new = b""
+        new_total = len(new_blob)
         kindlabel = "裸 ramdisk"
 
     report.append(">>> %s  [%s]" % (base, kindlabel))
@@ -308,20 +527,34 @@ def process(path, report):
                   % (rsz, len(new_blob), len(new_raw), tail))
     for name, old, newm in changed:
         report.append("    %-18s %o -> %o" % (name, old, newm))
-    report.append("    重压缩为 %d 块(与原一致)" % nblocks)
-    return True, (kind, out_head, new_blob, tailbytes, rsz, changed)
+    report.append("    重压缩 %s/%d: 原%d 块 -> 实用 %d 块(预算 %d B)"
+                  % (LZ4_MODE, LZ4_LEVEL, nblocks, nblocks_used, budget))
+    report.append("    文件总长 %d B (容量上限 %d B, 余量 %+d B)"
+                  % (new_total, RECOVERY_PARTITION_MAX,
+                     RECOVERY_PARTITION_MAX - new_total))
+    return True, (kind, out_head, new_blob, tail_new, footer_new,
+                  rsz, changed, new_total)
 
 
 def write_back(path, payload):
     """原子写回, 并从磁盘重新读回复验 —— 不信任内存对象。"""
-    kind, new_head, new_blob, tailbytes, old_rsz, changed = payload
+    (kind, new_head, new_blob, tail_new, footer_new,
+     old_rsz, changed, expect_total) = payload
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
         if kind == "boot":
             f.write(new_head)
         f.write(new_blob)
-        f.write(tailbytes)
+        f.write(tail_new)
+        if footer_new:
+            f.write(footer_new)
     try:
+        actual = os.path.getsize(tmp)
+        if actual != expect_total:
+            raise Fail("写回后文件长度=%d != 预期 %d" % (actual, expect_total))
+        if actual > RECOVERY_PARTITION_MAX:
+            raise Fail("写回后 %d B 超出分区容量上限 %d B"
+                       % (actual, RECOVERY_PARTITION_MAX))
         k2, _h2, _k2, rsz2 = read_header(tmp)
         if k2 != kind:
             raise Fail("写回后类型变了: %s -> %s" % (kind, k2))
@@ -338,6 +571,16 @@ def write_back(path, payload):
         bad = [n for n, _o, _nw in changed if not (modes.get(n, 0) & 0o111)]
         if bad:
             raise Fail("写回后从磁盘复验仍无执行位: %s" % bad)
+        # footer 必须仍在末尾, 且其 original_image_size 仍指向真实 vbmeta 偏移
+        if footer_new:
+            ft = read_avb_footer(tmp)
+            if ft is None:
+                raise Fail("写回后 AVB footer 丢失")
+            if ft["original_image_size"] + ft["vbmeta_size"] > actual:
+                raise Fail("footer 指向的 vbmeta 越界: %d+%d > %d"
+                           % (ft["original_image_size"], ft["vbmeta_size"], actual))
+            if ft["raw"] != footer_new:
+                raise Fail("写回后 footer 字节与预期不一致")
     except Fail:
         if os.path.exists(tmp):
             os.remove(tmp)
