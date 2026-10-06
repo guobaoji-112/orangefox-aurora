@@ -27,3 +27,9 @@ Swap:          32767         310       32457
 Mem:           15988        5756        3610          17        6621        9620
 Swap:          32767         301       32466
 [  5% 1672/28548] //system/tools/aidl:libaidl-common clang++ aidl_to_ndk.cpp [linux_glibc] (priority: 50)
+== t=6 10-06 13:34:05 ==
+/dev/root       146G  126G   20G  87% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5250        3470          18        7267       10124
+Swap:          32767         296       32471
+[ 10% 2943/28548] //system/libhidl:libhidlbase clang++ base/HidlSupport.cpp (priority: 40)
