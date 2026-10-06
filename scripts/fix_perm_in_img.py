@@ -90,6 +90,7 @@ AVB0_MAGIC = b"AVB0"
 AVB_FOOTER_MAGIC = b"AVBf"
 LZ4_MAGIC = 0x184C2102
 CPIO_MAGICS = (b"070701", b"070702")
+CPIO_TRAILER = b"TRAILER!!!"
 HDR = 110
 
 # recovery 分区容量上限。与设备树 BOARD_RECOVERYIMAGE_PARTITION_SIZE 一致。
@@ -169,20 +170,55 @@ def lz4_decompress(data):
             out += blk
         else:
             try:
+                import lz4
                 import lz4.block
             except ImportError:
                 raise Fail(
-                    "缺少 python-lz4。CI 上装法: apt-get install -y python3-lz4 "
-                    "(或 python3 -m pip install lz4)。"
-                    "注意: liblz4-tool 只提供 lz4 命令行, 不含 Python 绑定 —— "
-                    "装了它本脚本仍会失败(run#49 的失败根因)。")
-            out += lz4.block.decompress(blk, uncompressed_size=1 << 30)
+                    "缺少 python-lz4。CI 装法: "
+                    "python3 -m pip install 'lz4>=4.0,<5'\n"
+                    "    注意1: liblz4-tool / python3-lz4(apt) 都不可靠 —— 前者只是\n"
+                    "      命令行工具不含 Python 绑定; 后者是 3.1.3, 传\n"
+                    "      uncompressed_size 时会**静默返回被截断的明文**\n"
+                    "      (3.x 的 C 层跳过 \"解压长度 vs 期望长度\" 校验),\n"
+                    "      表现为 cpio 只解析出前几条、后续文件\"不存在\"(run#51 根因)。\n"
+                    "    注意2: 必须 >=4.0, 已实测 4.4.5 行为正确。")
+            _ver = getattr(lz4, "__version__", "0")
+            _maj = int(_ver.split(".")[0]) if _ver[:1].isdigit() else 0
+            if _maj < 4:
+                raise Fail(
+                    "python-lz4 %s 过旧, 需 >=4.0。3.x 会静默返回截断明文, "
+                    "使 cpio 解析不全(run#51 的失败根因)。请用 pip 装 4.x。"
+                    % _ver)
+            try:
+                out += lz4.block.decompress(blk, uncompressed_size=1 << 30)
+            except Exception as ex:
+                # 必须包成 Fail: 裸 traceback 会被 main 的错误处理漏过,
+                # 打印出栈而不是给出可操作信息。
+                # (变异测试时靠这条抓到"块长被改小 -> 解压直接抛异常")
+                raise Fail("LZ4 块解压失败(第 %d 块, 压缩 %d B): %s"
+                           % (len(sizes) + 1, len(blk), ex))
         sizes.append(size)
     if not sizes:
         raise Fail("LZ4 段内无块")
     if pos < n and any(data[pos:]):
         raise Fail("段尾有未归属数据 @%d/%d" % (pos, n))
-    return bytes(out), len(sizes), sizes
+    raw = bytes(out)
+    # ---- 解压结果的结构自检 ----------------------------------------
+    # 若python-lz4 版本行为异常(静默返回截断明文), 下面这些检查会立刻
+    # 抓到, 而不会一路走到"目标文件不存在"那种误导性的报错。
+    if len(raw) < 110 or raw[:6] not in CPIO_MAGICS:
+        raise Fail("解压结果不像 cpio newc: 首6 字节 = %r (明文 %d B)"
+                   % (raw[:6], len(raw)))
+    # cpio 以 TRAILER!!! 结束; 找不到它说明明文被截断
+    if CPIO_TRAILER not in raw:
+        # 退一步做弱检查: 至少有足够多的合法条目, 且最后一个文件数据未越界
+        _probe = list(cpio_iter(raw))
+        if len(_probe) < 100:
+            raise Fail(
+                "解压明文 %d B 内找不到 cpio TRAILER!!!, 且只解析出 %d 条 "
+                "(正常 4000+ 条) —— 高度疑似 python-lz4 静默截断明文。"
+                "请确认 lz4 >= 4.0。" % (len(raw), len(_probe)))
+    return raw, len(sizes), sizes
 
 
 def lz4_compress_like(data, nblocks, max_total=None):
@@ -412,10 +448,26 @@ def process(path, report):
         raise Fail("ramdisk 段读不足(期望 %d, 实得 %d)" % (rsz, len(blob)))
 
     raw, nblocks, _sizes = lz4_decompress(blob)
-    names = {n for (_p, _h, _f, n, _d) in cpio_iter(raw)}
+    ents = list(cpio_iter(raw))
+    names = {n for (_p, _h, _f, n, _d) in ents}
     missing = [t for t in TARGETS if t not in names]
     if missing:
-        raise Fail("目标文件在 ramdisk 中不存在: %s" % missing)
+        # 报出真实现场而不是只说"缺失" —— run#51 就是在这一行卡住,
+        # 而日志只列出缺失项, 完全看不出 ramdisk 里到底有什么。
+        # (根因见下方 raise 的详细诊断: 两种可能需现场数据才能区分)
+        sbin_like = sorted(n for n in names
+                           if ("bash" in n or "magiskboot" in n
+                               or n.endswith("/zip") or "FFiles" in n))[:20]
+        raise Fail(
+            "目标文件在 ramdisk 中不存在: %s\n"
+            "    诊断: ramdisk %d B -> cpio %d B, LZ4 %d 块, cpio 条目 %d 个\n"
+            "    诊断: cpio 首个条目 = %r\n"
+            "    诊断: 含 bash/magiskboot/zip/FFiles 的条目 = %s\n"
+            "    诊断: 前 15 个条目 = %s"
+            % (missing, len(blob), len(raw), nblocks, len(ents),
+               ents[0][3] if ents else None,
+               sbin_like if sbin_like else "(无)",
+               [n for (_p, _h, _f, n, _d) in ents][:15]))
 
     new_raw, changed, tail = fix_cpio_modes(raw)
     if not changed:

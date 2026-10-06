@@ -844,22 +844,46 @@ jobs:
           # 独立成一步而非并入产物修复: 缺依赖时能一眼看出是"环境问题"而非
           #   "产物问题", 且失败发生在上传产物之前, 不会留下一堆无意义产物。
           set -e
+          # run#51 教训: apt 的 python3-lz4 是 **3.1.3**(2021 年), 与本地 4.4.5
+          # 行为不同。3.1.3 走 LZ4_decompress_safe_usingDict + Python 层包装,
+          # 传 uncompressed_size 时会跳过"解压长度 vs 期望长度"校验
+          # (源码: `else if (((size_t)output_size != dest_size) && (uncompressed_size < 0))`),
+          # 于是**静默返回被截断的明文**。表现为 cpio 只解析出前几条,
+          # 后面的文件"不存在", 而解压本身不报错。
+          #
+          # 上一步那个 1472 B 小探针在两个版本上都能过, 所以没抓出来 ——
+          # **自检的样本必须与真实数据同量级, 否则测的是玩具数据。**
+          #
+          # 结论: 不用 apt 的 3.1.3, 强制 pip 装 4.x(有Windows/Linux 预编译轮子)。
           for i in 1 2 3; do
-            sudo apt-get install -y python3-lz4 && break || (echo "apt python3-lz4 重试 $i"; sleep 10)
+            python3 -m pip install --upgrade "lz4>=4.0,<5" && break \
+              || (echo "pip lz4 重试 $i"; sleep 10)
           done
-          # apt装成功时 import lz4.block 可用; 装不上(如包源缺失)退回 pip
-          if ! python3 -c "import lz4.block" 2>/dev/null; then
-            echo ">>> apt 的 python3-lz4 不可用, 改走 pip"
-            python3 -m pip install --upgrade lz4
-          fi
-          # fail-fast: 依赖仍不可用就立即退出, 不浪费编译时间
+          # fail-fast: 版本不符或行为异常就立即退出, 不浪费上传与后续步骤
           python3 - <<'PY'
-          import lz4.block, sys
-          probe = b"orangefox-lz4-self-test" * 64
+          import sys
+          import lz4, lz4.block
+          ver = getattr(lz4, "__version__", "0")
+          major = int(ver.split(".")[0]) if ver[0].isdigit() else 0
+          if major < 4:
+              sys.exit("!! python-lz4 %s 过旧(需 >=4.0)。"
+                       "3.x 会在传 uncompressed_size 时静默返回截断明文, "
+                       "导致 cpio 解析不全(run#51 的失败根因)。" % ver)
+          # 真实量级探针: 单块 >8MB, 接近产物 ramdisk 里单块的明文规模。
+          # 小探针测不出版本差异 —— 必须用同量级数据。
+          probe = (b"orangefox-lz4-self-test-16MB-" * (1 << 20))[: 16 << 20]
           c = lz4.block.compress(probe, store_size=False,
                                   mode="high_compression", compression=12)
-          assert lz4.block.decompress(c, uncompressed_size=len(probe)) == probe, "往返不一致"
-          print(">>> python-lz4 就绪: HC12 往返自检通过 (%d -> %d B)" % (len(probe), len(c)))
+          got = lz4.block.decompress(c, uncompressed_size=1 << 30)
+          if got != probe:
+              sys.exit("!! 16MB 往返不一致: 期望 %d 实得 %d(静默截断)" % (len(probe), len(got)))
+          # 再验一次"不指定大buffer"路径, 与脚本内实际用法一致
+          got2 = lz4.block.decompress(c, uncompressed_size=len(probe) + 1024)
+          if got2 != probe:
+              sys.exit("!! 16MB 往返(小余量 buffer)不一致: 期望 %d 实得 %d"
+                       % (len(probe), len(got2)))
+          print(">>> python-lz4 %s 就绪: 16MB HC12 往返自检通过 (%d -> %d B)"
+                % (ver, len(probe), len(c)))
           PY
 
       - name: "产物级执行位修复 (run#49: 修超分区容量 + 补容器断言)"
