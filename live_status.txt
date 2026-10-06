@@ -105,3 +105,9 @@ Swap:          32767         279       32488
 Mem:           15988        5127         781          20       10079       10245
 Swap:          32767         279       32488
 [ 65% 18786/28548] //system/core/libsuspend:libsuspend clang autosuspend.c (priority: 13)
+== t=19 10-06 14:13:22 ==
+/dev/root       146G  129G   17G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5233         564          20       10190       10139
+Swap:          32767         276       32491
+[ 70% 20249/28548] //bootable/recovery:libaosprecovery strip libaosprecovery.so (priority: 12)
