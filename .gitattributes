@@ -1,0 +1,5 @@
+# 本仓库 core.autocrlf=true, 会在检出时把 LF 转成 CRLF。
+# Python 脚本虽能容忍 CRLF, 但 diff 噪声与 shell 脚本的 shebang 风险应尽量避免,
+# 故对脚本类文件显式锁定 LF, 保证 Linux 构建机上的字节与本地一致。
+*.py text eol=lf
+*.sh text eol=lf
