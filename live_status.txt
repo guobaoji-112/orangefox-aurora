@@ -75,3 +75,9 @@ Swap:          32767         283       32484
 Mem:           15988        5099        1820          20        9068       10274
 Swap:          32767         282       32485
 [ 45% 12873/28548] //system/core/fs_mgr/libsnapshot:libsnapshot_cow clang++ libsnapshot_cow/cow_format.cpp (priority: 17)
+== t=14 10-06 13:58:15 ==
+/dev/root       146G  128G   18G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5078        1634          20        9276       10295
+Swap:          32767         280       32487
+[ 48% 13734/28548] //prebuilts/rust:libprofiler_builtins.rust_sysroot rustc linux-x86/1.75.0/src/stdlibs/library/profiler_builtins/src/lib.rs (priority: 16)
