@@ -57,3 +57,9 @@ Swap:          32767         288       32479
 Mem:           15988        4936        2776          19        8275       10438
 Swap:          32767         287       32480
 [ 30% 8818/28548] HIDL inheritance hierarchy: android.hardware.audio@4.0::IStream => '/home/runner/fox_14.1/out/soong/.intermediates/hardware/interfaces/audio/4.0/android.hardware.audio@4.0-inheritance-hierarchy/gen/IStream_inheritance_hierarchy.json' (priority: 20)
+== t=11 10-06 13:49:11 ==
+/dev/root       146G  127G   19G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        4982        2505          20        8500       10390
+Swap:          32767         284       32483
+[ 36% 10483/28548] //external/libchrome:libchrome clang++ base/base_paths_posix.cc (priority: 19)
