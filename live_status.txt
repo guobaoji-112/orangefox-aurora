@@ -87,3 +87,9 @@ Swap:          32767         280       32487
 Mem:           15988        5950         531          20        9506        9422
 Swap:          32767         280       32487
 [ 51% 14825/28548] //external/protobuf:libprotobuf-cpp-full clang++ src/google/protobuf/any.cc [arm] (priority: 15)
+== t=16 10-06 14:04:18 ==
+/dev/root       146G  128G   18G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        4985        1499          20        9503       10387
+Swap:          32767         279       32488
+[ 56% 16205/28548] //external/icu/icu4c/source/common:libicuuc clang++ uloc_tag.cpp [linux_glibc] (priority: 14)
