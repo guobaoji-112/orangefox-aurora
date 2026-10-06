@@ -15,3 +15,9 @@ Swap:          32767        4463       28304
 Mem:           15988       13944         363           9        1680        1439
 Swap:          32767       15408       17359
 [ 99% 1161/1162] cp /home/runner/fox_14.1/out/host/linux-x86/bin/soong_build
+== t=4 10-06 13:28:03 ==
+/dev/root       146G  125G   21G  86% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5532        4227          12        6228        9848
+Swap:          32767         310       32457
+[  4% 1410/28548] //external/protobuf:libprotoc clang++ src/google/protobuf/arenaz_sampler.cc [linux_glibc] (priority: 54)
