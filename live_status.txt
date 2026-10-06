@@ -1,0 +1,5 @@
+== t=1 10-06 13:18:57 ==
+/dev/root       146G  120G   26G  83% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988         738        9474          47        5775       14607
+Swap:          32767           1       32766
