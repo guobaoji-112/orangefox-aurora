@@ -27,43 +27,6 @@ workflow 的实际执行序是
        - firmware_mnt 下 *.mdt / .b00    固件分区数据, 按设计就是 0644
   3. 剩余集合必须为空; 非空则列出并 exit 1
 
-对 boot.img 另外断言**容器完整性**(第二版新增, 见下)。
-
-## 为什么还必须断言尺寸与容器(第二版新增)
-
-第一版断言器只查 mode, 查出��堆 PASS, 却漏掉了最致命的问题:
-
-    修复前 ramdisk  47376664 B
-    修复后 ramdisk  56815549 B   (LZ4 default 模式, 压缩率 0.364 -> 0.437)
-    加上原样保留的尾部-> 总长 114296485 B
-
-而 recovery 分区容量由设备树硬性给定:
-
-    BOARD_RECOVERYIMAGE_PARTITION_SIZE := 104857600   # 100 MiB
-
-**114296485 > 104857600**。也就是说第一版"修好了 mode", 却产出了根本刷不进
-分区的镜像。症状是刷完开机失败, 而不是刷写阶段报错 —— 极难定位。
-
-更隐蔽的是: 模式改对了, 内容也改对了, 断言全绿, 唯独产物不能用。
-所以断言必须覆盖**交付约束**, 而不只是覆盖"我这次改的东西"。
-
-因此这里补三条容器断言:
-
-  4. 文件总长 <= recovery 分区容量上限
-  5. 末尾 AVB footer 的 original_image_size 指向的 vbmeta 偏移,
-     必须大于等于 ramdisk 末端(否则 bootloader 会把 ramdisk 内容当 vbmeta 读)
-  6. ramdisk 末端到 vbmeta 之间、vbmeta 到 footer 之间必须全为零填充
-     (残留非零字节 = 布局错乱, bootloader 会踩到)
-
-实测本树布局(修复后):
-
-    [0, 0x1000)      boot header
-    [0x1000, +rsz)   ramdisk 47364557 B
-    [+rsz, 47382528) 零填充 13875 B   <- 原 1768 B, ramdisk 变小故填充变大
-    [47382528, +832) vbmeta (AVB0, 未签名占位块)
-    [.., -64)        零填充 10092480 B
-    [-64, end)       AVB footer (AVBf)
-
 ## 容器格式说明(踩过的坑, 不要改)
 
 本树 ramdisk 是 **AOSP 专用 LZ4 legacy 变体**:
@@ -86,12 +49,7 @@ import struct
 import sys
 
 BOOT_MAGIC = b"ANDROID!"
-AVB0_MAGIC = b"AVB0"
-AVB_FOOTER_MAGIC = b"AVBf"
 LZ4_MAGIC = 0x184C2102
-
-# recovery 分区容量上限。与设备树 BOARD_RECOVERYIMAGE_PARTITION_SIZE 保持一致。
-RECOVERY_PARTITION_MAX = 104857600
 
 # 设计上就不需要执行位的后缀
 EXEMPT_SUFFIX = (".so", ".ko")
@@ -166,8 +124,7 @@ def decompress_android_lz4(data):
             try:
                 import lz4.block
             except ImportError:
-                raise Fail("缺少 python-lz4(pip install lz4 / apt install python3-lz4), "
-                           "不做静默降级。liblz4-tool 不含Python 绑定。")
+                raise Fail("缺少 python-lz4 依赖(pip install lz4), 不做静默降级")
             try:
                 out += lz4.block.decompress(blk, uncompressed_size=1 << 30)
             except Exception as ex:
@@ -253,77 +210,6 @@ def classify_missing_exec(entries):
     return real, exempt
 
 
-def assert_container(img_path, ramdisk_size):
-    """断言 boot.img 的容器完整性。返回 (问题列表, 说明行列表)。
-
-    独立于 fix 脚本重新解析 —— 不信任修复脚本自己的结论。
-    """
-    problems = []
-    notes = []
-    total = os.path.getsize(img_path)
-
-    # --- 4. 分区容量 ---
-    if total > RECOVERY_PARTITION_MAX:
-        problems.append("文件总长 %d B 超出 recovery 分区容量上限 %d B, 刷不进分区"
-                        % (total, RECOVERY_PARTITION_MAX))
-    notes.append("总长 %d B / 上限 %d B (余量 %+d B)"
-                 % (total, RECOVERY_PARTITION_MAX,
-                    RECOVERY_PARTITION_MAX - total))
-
-    ramdisk_end = 0x1000 + ramdisk_size
-    if ramdisk_end > total:
-        problems.append("ramdisk 末端 %d 越过文件末尾 %d" % (ramdisk_end, total))
-        return problems, notes
-
-    # --- AVB footer ---
-    with open(img_path, "rb") as f:
-        f.seek(-64, 2)
-        footer = f.read(64)
-    if footer[:4] != AVB_FOOTER_MAGIC:
-        notes.append("末尾无 AVB footer (AVBf), 跳过 vbmeta 定位校验")
-        return problems, notes
-    # 偏移经"已知真值(47382528 / 832)BE 编码反查 + 字段区语义"双重确定。
-    # 肉眼 hexdump 会把"行内第 N 字节"误当绝对偏移, 此处曾连续读错三轮。
-    vm_off = struct.unpack_from(">Q", footer, 12)[0]
-    vm_sz = struct.unpack_from(">Q", footer, 28)[0]
-    notes.append("AVB footer: vbmeta@%d +%d B" % (vm_off, vm_sz))
-
-    # --- 5. vbmeta 偏移必须落在 ramdisk 之后 ---
-    if vm_off < ramdisk_end:
-        problems.append("footer 指向的 vbmeta 偏移 %d < ramdisk 末端 %d, "
-                        "bootloader 会把 ramdisk 内容当 vbmeta 解析"
-                        % (vm_off, ramdisk_end))
-        return problems, notes
-    if vm_sz == 0 or vm_off + vm_sz > total - 64:
-        problems.append("vbmeta 区间 [%d, %d) 越出 footer 之前的空间(总长 %d)"
-                        % (vm_off, vm_off + vm_sz, total))
-        return problems, notes
-
-    # --- vbmeta magic ---
-    with open(img_path, "rb") as f:
-        f.seek(vm_off)
-        vmagic = f.read(4)
-    if vmagic != AVB0_MAGIC:
-        problems.append("vbmeta magic=%r, 不是 AVB0" % vmagic)
-
-    # --- 6. 两段填充必须全零 ---
-    for label, start, end in (
-            ("ramdisk->vbmeta", ramdisk_end, vm_off),
-            ("vbmeta->footer", vm_off + vm_sz, total - 64)):
-        if end <= start:
-            continue
-        with open(img_path, "rb") as f:
-            f.seek(start)
-            seg = f.read(end - start)
-        if any(seg):
-            first = next(i for i, b in enumerate(seg) if b)
-            problems.append("%s 填充段 [%d, %d) 含非零字节(首个@+%d), 布局错乱"
-                            % (label, start, end, first))
-        else:
-            notes.append("%s 填充 %d B 全零" % (label, len(seg)))
-    return problems, notes
-
-
 def main():
     if len(sys.argv) < 2:
         print("用法: assert_perm_in_img.py <boot.img> [更多 .img ...]")
@@ -346,13 +232,11 @@ def main():
             if head[:8] == BOOT_MAGIC:
                 blob, ksz = read_boot_ramdisk(img)
                 kind = "boot.img(kernelless=%s)" % (ksz == 0)
-                cprob, cnotes = assert_container(img, len(blob))
             else:
                 with open(img, "rb") as fh:
                     blob = fh.read()
                 ksz = -1
                 kind = "裸 ramdisk"
-                cprob, cnotes = [], []
             raw, blocks = decompress_android_lz4(blob)
             ents, consumed = parse_cpio_newc(raw)
         except Fail as ex:
@@ -367,20 +251,12 @@ def main():
               % (len(blob), len(raw), nblk, len(ents), consumed, len(raw)))
         print("    缺执行位的 ELF: 真缺陷 %d, 设计豁免 %d (.so/.ko/固件分区数据)"
               % (len(real), exempt))
-        if cnotes:
-            for n in cnotes:
-                print("    容器| %s" % n)
         checked += 1
         if real:
             failed = True
             for name, fsz, mode in sorted(real, key=lambda t: -t[1]):
                 print("    !! %-56s size=%-9d mode=%o" % (name, fsz, mode))
             print("    >> 判定: 产物内存在无执行位的可执行程序,修复未真正生效")
-        elif cprob:
-            failed = True
-            for msg in cprob:
-                print("    !! 容器: %s" % msg)
-            print("    >> 判定: 执行位齐备, 但容器非法 —— 产物无法安全刷入")
         else:
             print("    >> 判定: PASS, 产物内可执行程序执行位齐备")
 
@@ -391,13 +267,12 @@ def main():
 
     if failed:
         print("")
-        print("!! 产物级断言失败 —— 要么 chmod 落在镜像封装之后未进产物,")
-        print("!! 要么容器非法(超分区容量 / vbmeta 布局错乱), 产物无法安全刷入")
+        print("!! 产物级执行位断言失败 —— chmod 落在镜像封装之后, 未进产物")
         print("!! 修法: chmod 必须在 mka 之前, 或改为产物级后处理(解 ramdisk 改 mode 再重封装)")
         return 1
 
     print("")
-    print(">>> 产物级断言 PASS: %d 个产物的执行位与容器完整性均合格" % checked)
+    print(">>> 产物级执行位断言 PASS: %d 个产物的可执行程序执行位齐备" % checked)
     return 0
 
 

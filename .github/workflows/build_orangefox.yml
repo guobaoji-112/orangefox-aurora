@@ -774,39 +774,6 @@ jobs:
           python3 /tmp/symck2.py "$RD" || { echo "!! se_omapi 符号闭包校验失败(见上), 镜像将无法链接加载"; exit 1; }
 
 
-      - name: 修复 ramdisk 执行位 (依据 run#45 产物实证)
-        run: |
-          # 理由: run#45 产物 cpio 实测有 4 个 AArch64 ELF 可执行程序 mode=0100644(无执行位),
-          #   sbin/bash / sbin/magiskboot / sbin/zip / FFiles/ps
-          # 它们不是 .so/.ko(共享库与内核模块, 不需要执行位),
-          # 也不是 firmware_mnt 固件分区数据(按设计就是 0644) —— 剔除后的差集才是真缺陷。
-          # 脚本自带三类证据输出: 已修复 / 已确认不改 / 失败项;
-          # 任一失败项即 exit 1, 不放宽阈值、不改预期值。
-          #
-          # 显式不改的两项(脚本内部会断言未被改动, 防后人“顺手对齐”):
-          #   product / system_ext —— OF 空目录与 TWRP 的死链符号链接语义等价,
-          #     且 /system/product、/system/system_ext 在两个镜像里都不存在,
-          #     file_contexts 用 /(product|system/product)(/.*)? 二选一匹配。
-          set -o pipefail
-          # GitHub Actions 的每个 step 是独立 shell, 上一步(step6)的 RD 不会继承过来,
-          # 必须在此重新定位 —— 否则 $RD 为空, 脚本会直接 exit 1。
-          # 判据与 symck2 一致: 目录存在且含 se_omapi, 才认作编译产物 rootdir。
-          RD=""
-          for cand in "$HOME/fox_14.1/out/target/product/sm8650/recovery/root"\
-                      "$HOME/fox_14.1/out/target/product/sm8650/rootdir"\
-                      "$HOME/fox_14.1/out/target/product/sm8650/system"; do
-            [ -d "$cand" ] || continue
-            [ -e "$cand/bin/se_omapi" ] || [ -e "$cand/system/bin/se_omapi" ] || continue
-            RD="$cand"; break
-          done
-          [ -n "$RD" ] || { echo "!! 未找到编译产物 rootdir(含 se_omapi), 无法修复执行位"; exit 1; }
-          echo ">>> 权限修复基准(编译产物): $RD"
-          python3 "$GITHUB_WORKSPACE/scripts/fix_perm46.py" "$RD" 2>&1 | tee /tmp/fixperm46.log
-          # 内嵌 ELF 解析依赖同目录的 elfparse.py, 确保它已随仓库推送
-          ls -l "$GITHUB_WORKSPACE/scripts/elfparse.py" "$GITHUB_WORKSPACE/scripts/fix_perm46.py"
-          cp -f /tmp/fixperm46.log "$GITHUB_WORKSPACE/diag/fixperm46.log" 2>/dev/null || true
-
-
       - name: 收集错误诊断
         if: failure()
         run: |
@@ -864,6 +831,56 @@ jobs:
             -exec cp -v {} "$GITHUB_WORKSPACE/output/" \;
           ls -la "$GITHUB_WORKSPACE/output"
 
+
+      - name: "产物级执行位修复 (run#48: 修 run#47 的无效修复)"
+        run: |
+          # run#47 教训: 旧 step7 对 "$RD"(mka 产出的中间目录) 做 chmod,
+          #   但 mka 在上一步已把 ramdisk 打包进 .img —— chmod 只改 inode,
+          #   不回写已生成的镜像。磁盘上看似修好了, 产物里 mode 一个字节都没变。
+          #   且不能把 chmod 挪到 mka 之前: rootdir 本身就是 mka 的产物, 循环依赖。
+          # 本轮改为产物级后处理, 校验对象 = .img 本身。
+          #
+          # 依据: run#45/#47 产物 cpio 实测有 4 个 AArch64 ELF 可执行程序 mode=0100644
+          #   sbin/bash / sbin/magiskboot / sbin/zip / FFiles/ps
+          # 它们不是 .so/.ko(共享库与内核模块, 不需要执行位),
+          # 也不是 firmware_mnt 下 *.mdt/*.b00(固件分区数据, 按设计就是 0644)
+          #   —— 剔除这两类后的差集才是真缺陷。
+          #
+          # 显式不改的两项(断言内会确认未被改动):
+          #   product / system_ext —— OF 空目录与 TWRP 的死链符号链接语义等价,
+          #     且 /system/product、/system/system_ext 在两个镜像里都不存在,
+          #     file_contexts 用 /(product|system/product)(/.*)? 二选一匹配。
+          set -o pipefail
+          OUT="$GITHUB_WORKSPACE/output"
+          if [ ! -d "$OUT" ]; then
+          echo "!! 未找到产物目录 $OUT, 上游收集步骤异常"
+          exit 1
+          fi
+          shopt -s nullglob
+          imgs=("$OUT"/*.img)
+          if [ ${#imgs[@]} -eq 0 ]; then
+          echo "!! $OUT 下无 .img, 拒绝输出 PASS"
+          exit 1
+          fi
+          echo ">>> 待处理产物 ${#imgs[@]} 个"
+          ls -l "${imgs[@]}"
+          python3 "$GITHUB_WORKSPACE/scripts/fix_perm_in_img.py" "${imgs[@]}" 2>&1 | tee /tmp/fiximg.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+          echo "!! 产物级修复失败(退出码 $rc)"
+          exit 1
+          fi
+          # 独立断言器复核(与修复脚本不同代码路径, 避免同源误判)
+          echo ">>> ==== 产物级执行位断言(独立复核) ===="
+          python3 "$GITHUB_WORKSPACE/scripts/assert_perm_in_img.py" "${imgs[@]}" 2>&1 | tee /tmp/assertperm.log
+          rc=${PIPESTATUS[0]}
+          mkdir -p "$GITHUB_WORKSPACE/diag"
+          cp -f /tmp/fiximg.log /tmp/assertperm.log "$GITHUB_WORKSPACE/diag/" 2>/dev/null || true
+          if [ "$rc" -ne 0 ]; then
+          echo "!! 产物级断言失败: .img 内仍存在无执行位的可执行程序"
+          exit 1
+          fi
+          echo ">>> 产物级执行位修复与断言均通过"
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
