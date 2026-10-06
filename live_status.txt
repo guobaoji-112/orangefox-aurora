@@ -117,3 +117,9 @@ Swap:          32767         276       32491
 Mem:           15988        5171         298          20       10518       10201
 Swap:          32767         276       32491
 [ 74% 21325/28548] //system/linkerconfig:linkerconfig_contents clang++ contents/namespace/rs.cc [linux_glibc] (priority: 12)
+== t=21 10-06 14:19:24 ==
+/dev/root       146G  130G   16G  90% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5181         847          20        9959       10191
+Swap:          32767         276       32491
+[ 94% 26988/28548] //external/libxml2:libxml2 strip libxml2.so (priority: 10)
