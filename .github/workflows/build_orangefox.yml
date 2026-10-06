@@ -832,7 +832,7 @@ jobs:
           ls -la "$GITHUB_WORKSPACE/output"
 
 
-      - name: "产物级执行位修复 (run#48: 修 run#47 的无效修复)"
+      - name: "产物级执行位修复 (run#49: 修超分区容量 + 补容器断言)"
         run: |
           # run#47 教训: 旧 step7 对 "$RD"(mka 产出的中间目录) 做 chmod,
           #   但 mka 在上一步已把 ramdisk 打包进 .img —— chmod 只改 inode,
@@ -853,22 +853,22 @@ jobs:
           set -o pipefail
           OUT="$GITHUB_WORKSPACE/output"
           if [ ! -d "$OUT" ]; then
-          echo "!! 未找到产物目录 $OUT, 上游收集步骤异常"
-          exit 1
+            echo "!! 未找到产物目录 $OUT, 上游收集步骤异常"
+            exit 1
           fi
           shopt -s nullglob
           imgs=("$OUT"/*.img)
           if [ ${#imgs[@]} -eq 0 ]; then
-          echo "!! $OUT 下无 .img, 拒绝输出 PASS"
-          exit 1
+            echo "!! $OUT 下无 .img, 拒绝输出 PASS"
+            exit 1
           fi
           echo ">>> 待处理产物 ${#imgs[@]} 个"
           ls -l "${imgs[@]}"
           python3 "$GITHUB_WORKSPACE/scripts/fix_perm_in_img.py" "${imgs[@]}" 2>&1 | tee /tmp/fiximg.log
           rc=${PIPESTATUS[0]}
           if [ "$rc" -ne 0 ]; then
-          echo "!! 产物级修复失败(退出码 $rc)"
-          exit 1
+            echo "!! 产物级修复失败(退出码 $rc)"
+            exit 1
           fi
           # 独立断言器复核(与修复脚本不同代码路径, 避免同源误判)
           echo ">>> ==== 产物级执行位断言(独立复核) ===="
@@ -877,10 +877,34 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/diag"
           cp -f /tmp/fiximg.log /tmp/assertperm.log "$GITHUB_WORKSPACE/diag/" 2>/dev/null || true
           if [ "$rc" -ne 0 ]; then
-          echo "!! 产物级断言失败: .img 内仍存在无执行位的可执行程序"
-          exit 1
+            echo "!! 产物级断言失败: .img 内仍存在无执行位的可执行程序, 或容器非法"
+            exit 1
           fi
-          echo ">>> 产物级执行位修复与断言均通过"
+          # ---- 分区容量闸门(run#49新增) ----
+          # 上一版只查执行位, 查出一堆 PASS, 却漏掉了最致命的问题:
+          #   LZ4 default 模式重压使 ramdisk 47376664 -> 56815549 B,
+          #   叠加原样保留的尾部 -> 总长 114296485 B, 而 recovery 分区只有
+          #   104857600 B。模式改对了、内容改对了、断言全绿, 唯独产物刷不进分区,
+          #   症状是刷完开机失败而非刷写报错, 极难定位。
+          # 所以在 workflow 层再加一道显式闸门: 超容量即exit 1。
+          # 上限取自设备树 BOARD_RECOVERYIMAGE_PARTITION_SIZE。
+          MAX_BYTES=$((100 * 1024 * 1024))
+          echo ">>> ==== 分区容量闸门 (上限 $MAX_BYTES B) ===="
+          sizefail=0
+          for img in "${imgs[@]}"; do
+            actual=$(stat -c '%s' "$img")
+            printf '    %-46s %12d B  (余量 %+d)\n' "$(basename "$img")" \
+              "$actual" "$((MAX_BYTES - actual))"
+            if [ "$actual" -gt "$MAX_BYTES" ]; then
+              echo "!! 超分区容量: $actual > $MAX_BYTES, 该镜像刷不进 recovery 分区"
+              sizefail=1
+            fi
+          done
+          echo ">>> ==== 容量闸门结束 sizefail=$sizefail ===="
+          if [ "$sizefail" -ne 0 ]; then
+            exit 1
+          fi
+          echo ">>> 产物级执行位修复、断言与容量闸门均通过"
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
