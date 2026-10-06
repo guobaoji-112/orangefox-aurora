@@ -93,3 +93,9 @@ Swap:          32767         280       32487
 Mem:           15988        4985        1499          20        9503       10387
 Swap:          32767         279       32488
 [ 56% 16205/28548] //external/icu/icu4c/source/common:libicuuc clang++ uloc_tag.cpp [linux_glibc] (priority: 14)
+== t=17 10-06 14:07:19 ==
+/dev/root       146G  129G   17G  89% /
+               total        used        free      shared  buff/cache   available
+Mem:           15988        5074        1108          20        9805       10298
+Swap:          32767         279       32488
+[ 60% 17261/28548] //external/libchrome:libchrome clang++ base/metrics/persistent_sample_map.cc (priority: 13)
